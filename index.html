@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Album Ranker</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Album Ranker</h1>
+    <p class="subtitle">Pick the album you prefer in each matchup. Repeat until everything is ranked.</p>
+  </header>
+
+  <main>
+    <section id="progress-section">
+      <div id="progress-text">Loading…</div>
+      <div id="progress-bar"><div id="progress-fill"></div></div>
+    </section>
+
+    <section id="matchup-section">
+      <h2>Which do you prefer?</h2>
+      <div id="matchup">
+        <button class="album-card" id="card-a"></button>
+        <div class="vs">vs</div>
+        <button class="album-card" id="card-b"></button>
+      </div>
+    </section>
+
+    <section id="standings-section">
+      <h2>Current Standings <span class="hint">(updates as comparisons resolve)</span></h2>
+      <ol id="standings"></ol>
+    </section>
+
+    <section id="results-section" class="hidden">
+      <h2>Final Ranking</h2>
+      <ol id="final-list"></ol>
+      <h3>JSON Output</h3>
+      <textarea id="json-output" readonly rows="14"></textarea>
+      <button id="copy-json">Copy JSON</button>
+      <button id="restart">Start Over</button>
+    </section>
+  </main>
+
+  <script src="albums.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
