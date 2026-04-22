@@ -30,3 +30,8 @@ The bundled list is 8 picks from the HiFi vinyl wishlist (Chris's rank=1 selecti
 ## Design Notes
 
 The original spec asked for a single-elimination bracket with placement rounds. That approach matches the visual idea of a "bracket" but doesn't actually produce a defensible full ranking without nearly as many additional placement matches as merge sort uses anyway. Merge sort is simpler, correct by construction, and shows a partial "current standings" preview as merges complete.
+
+# To Improve
+
+- Just tried it out. Very cool. But it feels like it asks for too many comparisons. We don't need a bulletproof sort here. Rough bucketing would be enough, and if that can be done with fewer comparisons, it's worth it.
+- Full album list: [Albums.md](Albums.md)
