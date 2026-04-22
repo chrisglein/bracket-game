@@ -1,33 +1,126 @@
-// Album Ranker — pairwise merge sort with interactive comparisons.
+// Album Ranker — Swiss-system tournament.
 //
-// Approach:
-//   - Albums are sorted via merge sort. Every comparison is presented to the user
-//     as a "pick A or B" matchup. This produces a complete, correct ordering using
-//     ~n*log2(n) comparisons (e.g. ~17 for 8 albums, ~64 for 16, ~296 for 64).
-//   - The "current standings" view shows the latest fully-merged run as a sneak
-//     peek of how the ranking is shaping up.
-//   - When sorting completes, results render and JSON output is shown.
+// Instead of a full merge sort (~n*log2(n) comparisons), this runs a fixed
+// number of Swiss rounds where albums with similar records are paired against
+// each other. After all rounds, albums bucket into tiers by win count.
+// Buchholz tiebreaker (sum of opponents' wins) orders within tiers.
+//
+// For 64 albums: 5 rounds = 160 comparisons (vs ~296 for full sort).
+// Fewer rounds = fewer comparisons, coarser tiers.
 
+// --- DOM refs ---
+const setupSection = document.getElementById("setup-section");
+const albumCountEl = document.getElementById("album-count");
+const roundSlider = document.getElementById("round-slider");
+const roundDisplay = document.getElementById("round-display");
+const comparisonEstimate = document.getElementById("comparison-estimate");
+const startBtn = document.getElementById("start-btn");
+
+const progressSection = document.getElementById("progress-section");
+const progressText = document.getElementById("progress-text");
+const progressBar = document.getElementById("progress-bar");
+
+const matchupSection = document.getElementById("matchup-section");
+const roundInfo = document.getElementById("round-info");
 const cardA = document.getElementById("card-a");
 const cardB = document.getElementById("card-b");
-const matchupSection = document.getElementById("matchup-section");
+
+const standingsSection = document.getElementById("standings-section");
+const standingsEl = document.getElementById("standings");
+
 const resultsSection = document.getElementById("results-section");
-const standingsList = document.getElementById("standings");
-const finalList = document.getElementById("final-list");
+const finalTiersEl = document.getElementById("final-tiers");
 const jsonOutput = document.getElementById("json-output");
-const progressText = document.getElementById("progress-text");
-const progressFill = document.getElementById("progress-fill");
 const copyBtn = document.getElementById("copy-json");
 const restartBtn = document.getElementById("restart");
 
-let pendingResolve = null;
+// --- State ---
+let stats = new Map(); // albumId -> { wins, opponents[], hadBye, buchholz }
 let comparisonsDone = 0;
-let estimatedTotal = 1;
-let latestStandings = [];
+let totalComparisons = 0;
+let currentRound = 0;
+let totalRounds = 0;
+let roundMatchups = 0;
+let roundMatchupsDone = 0;
+let pendingResolve = null;
 
+// --- Utilities ---
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function esc(str) {
+  const d = document.createElement("div");
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+// --- Swiss pairing ---
+// Groups albums by win count, shuffles within groups, pairs adjacent items,
+// avoids rematches when possible. Gives a bye to the lowest-ranked album
+// if the count is odd.
+function swissPair(albums) {
+  // Group by wins descending
+  const groups = new Map();
+  for (const a of albums) {
+    const w = stats.get(a.id).wins;
+    if (!groups.has(w)) groups.set(w, []);
+    groups.get(w).push(a);
+  }
+  const sorted = [];
+  for (const k of [...groups.keys()].sort((a, b) => b - a)) {
+    sorted.push(...shuffle([...groups.get(k)]));
+  }
+
+  // Handle odd count: bye goes to lowest album that hasn't had one yet
+  let byeAlbum = null;
+  if (sorted.length % 2 !== 0) {
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      if (!stats.get(sorted[i].id).hadBye) {
+        byeAlbum = sorted.splice(i, 1)[0];
+        break;
+      }
+    }
+    if (!byeAlbum) {
+      byeAlbum = sorted.pop();
+    }
+    stats.get(byeAlbum.id).wins++;
+    stats.get(byeAlbum.id).hadBye = true;
+  }
+
+  // Pair adjacent albums, preferring no rematch
+  const pairs = [];
+  const used = new Set();
+
+  for (let i = 0; i < sorted.length; i++) {
+    if (used.has(sorted[i].id)) continue;
+    const faced = new Set(stats.get(sorted[i].id).opponents);
+    let bestJ = -1;
+
+    for (let j = i + 1; j < sorted.length; j++) {
+      if (used.has(sorted[j].id)) continue;
+      if (!faced.has(sorted[j].id)) { bestJ = j; break; }
+      if (bestJ === -1) bestJ = j; // fallback: allow rematch
+    }
+
+    if (bestJ !== -1) {
+      pairs.push([sorted[i], sorted[bestJ]]);
+      used.add(sorted[i].id);
+      used.add(sorted[bestJ].id);
+    }
+  }
+
+  return { pairs, byeAlbum };
+}
+
+// --- UI: matchup ---
 function renderMatchup(a, b) {
-  cardA.innerHTML = `<div class="title">${a.title}</div><div class="artist">${a.artist}</div><div class="year">${a.year}</div>`;
-  cardB.innerHTML = `<div class="title">${b.title}</div><div class="artist">${b.artist}</div><div class="year">${b.year}</div>`;
+  cardA.innerHTML = `<div class="title">${esc(a.title)}</div><div class="artist">${esc(a.artist)}</div><div class="year">${a.year ?? ''}</div>`;
+  cardB.innerHTML = `<div class="title">${esc(b.title)}</div><div class="artist">${esc(b.artist)}</div><div class="year">${b.year ?? ''}</div>`;
   cardA.onclick = () => choose(a);
   cardB.onclick = () => choose(b);
 }
@@ -46,69 +139,186 @@ function pickWinner(a, b) {
   return new Promise(resolve => { pendingResolve = resolve; });
 }
 
-function updateProgress() {
-  const pct = Math.min(100, Math.round((comparisonsDone / estimatedTotal) * 100));
-  progressFill.style.width = pct + "%";
-  progressText.textContent = `${comparisonsDone} of ~${estimatedTotal} comparisons (${pct}%)`;
-}
-
-function renderStandings(list) {
-  latestStandings = list;
-  standingsList.innerHTML = list
-    .map(a => `<li><strong>${a.title}</strong> — ${a.artist} (${a.year})</li>`)
-    .join("");
-}
-
-// Async merge sort. Splits, sorts halves, then merges via user comparisons.
-async function mergeSort(items) {
-  if (items.length <= 1) return items;
-  const mid = Math.floor(items.length / 2);
-  const left = await mergeSort(items.slice(0, mid));
-  const right = await mergeSort(items.slice(mid));
-  return await merge(left, right);
-}
-
-async function merge(left, right) {
-  const result = [];
-  let i = 0, j = 0;
-  while (i < left.length && j < right.length) {
-    const winner = await pickWinner(left[i], right[j]);
-    if (winner === left[i]) {
-      result.push(left[i++]);
-    } else {
-      result.push(right[j++]);
-    }
+// --- UI: progress ---
+function buildProgressBar(numRounds) {
+  progressBar.innerHTML = "";
+  for (let i = 1; i <= numRounds; i++) {
+    const seg = document.createElement("div");
+    seg.className = "progress-segment";
+    seg.dataset.round = i;
+    const fill = document.createElement("div");
+    fill.className = "segment-fill";
+    const label = document.createElement("span");
+    label.className = "segment-label";
+    label.textContent = i;
+    seg.appendChild(fill);
+    seg.appendChild(label);
+    progressBar.appendChild(seg);
   }
-  while (i < left.length) result.push(left[i++]);
-  while (j < right.length) result.push(right[j++]);
-  // Show this merged segment as a partial standings preview.
-  renderStandings(result);
-  return result;
 }
 
-// Estimate comparisons for n items via merge sort: ~ceil(n * log2(n)) - n + 1
-function estimateComparisons(n) {
-  if (n <= 1) return 0;
-  return Math.ceil(n * Math.log2(n)) - n + 1;
+function updateProgress() {
+  // Update segment fills
+  const segments = progressBar.querySelectorAll(".progress-segment");
+  segments.forEach(seg => {
+    const r = parseInt(seg.dataset.round, 10);
+    const fill = seg.querySelector(".segment-fill");
+    if (r < currentRound) {
+      fill.style.width = "100%";
+      seg.classList.add("completed");
+      seg.classList.remove("active");
+    } else if (r === currentRound) {
+      const pct = roundMatchups > 0 ? Math.round((roundMatchupsDone / roundMatchups) * 100) : 0;
+      fill.style.width = pct + "%";
+      seg.classList.add("active");
+      seg.classList.remove("completed");
+    } else {
+      fill.style.width = "0%";
+      seg.classList.remove("active", "completed");
+    }
+  });
+  progressText.textContent = `Round ${currentRound} of ${totalRounds} — ${comparisonsDone} of ${totalComparisons} comparisons`;
 }
 
+// --- UI: standings (shown during tournament, updates after each round) ---
+function renderStandings(albums) {
+  const groups = new Map();
+  for (const a of albums) {
+    const w = stats.get(a.id).wins;
+    if (!groups.has(w)) groups.set(w, []);
+    groups.get(w).push(a);
+  }
+
+  let html = "";
+  for (const w of [...groups.keys()].sort((a, b) => b - a)) {
+    const tier = groups.get(w);
+    const stars = w > 0 ? "\u2605".repeat(w) : "\u2606";
+    html += `<div class="tier-group"><div class="tier-label">${stars} ${w} win${w !== 1 ? "s" : ""} (${tier.length})</div><ul>`;
+    for (const a of tier) {
+      html += `<li><strong>${esc(a.title)}</strong> — ${esc(a.artist)}${a.year ? ` (${a.year})` : ''}</li>`;
+    }
+    html += "</ul></div>";
+  }
+  standingsEl.innerHTML = html;
+}
+
+// --- UI: final results ---
 function showFinalResults(ranked) {
   matchupSection.classList.add("hidden");
+  standingsSection.classList.add("hidden");
   resultsSection.classList.remove("hidden");
 
-  finalList.innerHTML = ranked
-    .map((a, i) => `<li><strong>${a.title}</strong> — ${a.artist} (${a.year})</li>`)
-    .join("");
+  // Group into tiers by wins
+  const groups = new Map();
+  for (const a of ranked) {
+    const w = stats.get(a.id).wins;
+    if (!groups.has(w)) groups.set(w, []);
+    groups.get(w).push(a);
+  }
 
-  const json = ranked.map((a, i) => ({
-    rank: i + 1,
-    id: a.id,
-    title: a.title,
-    artist: a.artist,
-    year: a.year,
-  }));
+  const sortedKeys = [...groups.keys()].sort((a, b) => b - a);
+  let html = "";
+  let rank = 1;
+  let tierNum = 1;
+
+  for (const w of sortedKeys) {
+    const tier = groups.get(w);
+    html += `<div class="tier-group"><h3>Tier ${tierNum} — ${w} win${w !== 1 ? "s" : ""}</h3><ol start="${rank}">`;
+    for (const a of tier) {
+      html += `<li><strong>${esc(a.title)}</strong> — ${esc(a.artist)}${a.year ? ` (${a.year})` : ''}</li>`;
+    }
+    html += "</ol></div>";
+    rank += tier.length;
+    tierNum++;
+  }
+
+  finalTiersEl.innerHTML = html;
+
+  // JSON output
+  rank = 1;
+  tierNum = 1;
+  const json = [];
+  for (const w of sortedKeys) {
+    for (const a of groups.get(w)) {
+      json.push({
+        rank: rank++,
+        tier: tierNum,
+        id: a.id,
+        title: a.title,
+        artist: a.artist,
+        year: a.year,
+        wins: w,
+      });
+    }
+    tierNum++;
+  }
   jsonOutput.value = JSON.stringify(json, null, 2);
 }
+
+// --- Main tournament ---
+async function runTournament(albums, numRounds) {
+  stats = new Map();
+  for (const a of albums) {
+    stats.set(a.id, { wins: 0, opponents: [], hadBye: false, buchholz: 0 });
+  }
+
+  comparisonsDone = 0;
+  totalRounds = numRounds;
+  totalComparisons = Math.floor(albums.length / 2) * numRounds;
+  buildProgressBar(numRounds);
+  updateProgress();
+
+  for (let round = 1; round <= numRounds; round++) {
+    currentRound = round;
+    const { pairs } = swissPair(albums);
+    roundMatchups = pairs.length;
+    roundMatchupsDone = 0;
+    updateProgress();
+
+    for (let m = 0; m < pairs.length; m++) {
+      const [a, b] = pairs[m];
+      roundInfo.textContent = `Round ${round} of ${numRounds} \u2014 Matchup ${m + 1} of ${pairs.length}`;
+
+      const winner = await pickWinner(a, b);
+      const loser = winner === a ? b : a;
+
+      stats.get(winner.id).wins++;
+      stats.get(a.id).opponents.push(b.id);
+      stats.get(b.id).opponents.push(a.id);
+      roundMatchupsDone++;
+      updateProgress();
+    }
+
+    renderStandings(albums);
+  }
+
+  // Buchholz tiebreaker: sum of opponents' final win counts
+  for (const a of albums) {
+    const s = stats.get(a.id);
+    s.buchholz = s.opponents.reduce((sum, oppId) => sum + stats.get(oppId).wins, 0);
+  }
+
+  // Sort: wins desc, then Buchholz desc
+  const ranked = [...albums].sort((a, b) => {
+    const sa = stats.get(a.id);
+    const sb = stats.get(b.id);
+    if (sb.wins !== sa.wins) return sb.wins - sa.wins;
+    return sb.buchholz - sa.buchholz;
+  });
+
+  showFinalResults(ranked);
+}
+
+// --- Setup ---
+function updateEstimate() {
+  const n = ALBUMS.length;
+  const r = parseInt(roundSlider.value, 10);
+  const est = Math.floor(n / 2) * r;
+  roundDisplay.textContent = r;
+  comparisonEstimate.textContent = `~${est} comparisons \u2192 up to ${r + 1} tiers`;
+}
+
+roundSlider.addEventListener("input", updateEstimate);
 
 copyBtn.addEventListener("click", async () => {
   try {
@@ -123,24 +333,39 @@ copyBtn.addEventListener("click", async () => {
 
 restartBtn.addEventListener("click", () => location.reload());
 
+startBtn.addEventListener("click", () => {
+  setupSection.classList.add("hidden");
+  progressSection.classList.remove("hidden");
+  matchupSection.classList.remove("hidden");
+  standingsSection.classList.remove("hidden");
+
+  const shuffled = shuffle([...ALBUMS]);
+  const numRounds = parseInt(roundSlider.value, 10);
+  runTournament(shuffled, numRounds);
+});
+
 // --- Boot ---
-async function start() {
+function init() {
   if (!Array.isArray(ALBUMS) || ALBUMS.length === 0) {
-    progressText.textContent = "No albums loaded. Edit albums.js to add some.";
+    albumCountEl.textContent = "0";
+    comparisonEstimate.textContent = "No albums loaded. Edit albums.js.";
+    startBtn.disabled = true;
     return;
   }
   if (ALBUMS.length === 1) {
-    showFinalResults(ALBUMS);
+    albumCountEl.textContent = "1";
+    comparisonEstimate.textContent = "Only one album — nothing to compare.";
+    startBtn.disabled = true;
     return;
   }
-  // Light shuffle so the first matchups aren't always the same.
-  const shuffled = [...ALBUMS].sort(() => Math.random() - 0.5);
-  estimatedTotal = estimateComparisons(shuffled.length);
-  updateProgress();
 
-  const ranked = await mergeSort(shuffled);
-  renderStandings(ranked);
-  showFinalResults(ranked);
+  albumCountEl.textContent = ALBUMS.length;
+  const defaultRounds = 5;
+  const maxRounds = Math.min(10, ALBUMS.length - 1);
+  roundSlider.min = 2;
+  roundSlider.max = maxRounds;
+  roundSlider.value = Math.min(defaultRounds, maxRounds);
+  updateEstimate();
 }
 
-start();
+init();

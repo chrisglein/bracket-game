@@ -8,17 +8,30 @@
 <body>
   <header>
     <h1>Album Ranker</h1>
-    <p class="subtitle">Pick the album you prefer in each matchup. Repeat until everything is ranked.</p>
+    <p class="subtitle">Pick the album you prefer in each matchup. Albums land in tiers by wins.</p>
   </header>
 
   <main>
-    <section id="progress-section">
-      <div id="progress-text">Loading…</div>
-      <div id="progress-bar"><div id="progress-fill"></div></div>
+    <section id="setup-section">
+      <h2>Setup</h2>
+      <p><span id="album-count">0</span> albums loaded</p>
+      <div class="setting-row">
+        <label for="round-slider">Rounds</label>
+        <input type="range" id="round-slider" min="2" max="8" value="5" />
+        <span id="round-display">5</span>
+      </div>
+      <p id="comparison-estimate" class="hint"></p>
+      <button id="start-btn">Start Ranking</button>
     </section>
 
-    <section id="matchup-section">
+    <section id="progress-section" class="hidden">
+      <div id="progress-text"></div>
+      <div id="progress-bar"></div>
+    </section>
+
+    <section id="matchup-section" class="hidden">
       <h2>Which do you prefer?</h2>
+      <p id="round-info" class="hint"></p>
       <div id="matchup">
         <button class="album-card" id="card-a"></button>
         <div class="vs">vs</div>
@@ -26,14 +39,14 @@
       </div>
     </section>
 
-    <section id="standings-section">
-      <h2>Current Standings <span class="hint">(updates as comparisons resolve)</span></h2>
-      <ol id="standings"></ol>
+    <section id="standings-section" class="hidden">
+      <h2>Current Standings</h2>
+      <div id="standings"></div>
     </section>
 
     <section id="results-section" class="hidden">
       <h2>Final Ranking</h2>
-      <ol id="final-list"></ol>
+      <div id="final-tiers"></div>
       <h3>JSON Output</h3>
       <textarea id="json-output" readonly rows="14"></textarea>
       <button id="copy-json">Copy JSON</button>
