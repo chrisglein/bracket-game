@@ -118,9 +118,16 @@ function swissPair(albums) {
 }
 
 // --- UI: matchup ---
+function artImg(album, cls) {
+  if (typeof ALBUM_ART !== 'undefined' && ALBUM_ART[album.id]) {
+    return `<img class="${cls}" src="${esc(ALBUM_ART[album.id])}" alt="" onerror="this.remove()">`;
+  }
+  return '';
+}
+
 function renderMatchup(a, b) {
-  cardA.innerHTML = `<div class="title">${esc(a.title)}</div><div class="artist">${esc(a.artist)}</div><div class="year">${a.year ?? ''}</div>`;
-  cardB.innerHTML = `<div class="title">${esc(b.title)}</div><div class="artist">${esc(b.artist)}</div><div class="year">${b.year ?? ''}</div>`;
+  cardA.innerHTML = `${artImg(a, 'card-art')}<div class="card-text"><div class="title">${esc(a.title)}</div><div class="artist">${esc(a.artist)}</div><div class="year">${a.year ?? ''}</div></div>`;
+  cardB.innerHTML = `${artImg(b, 'card-art')}<div class="card-text"><div class="title">${esc(b.title)}</div><div class="artist">${esc(b.artist)}</div><div class="year">${b.year ?? ''}</div></div>`;
   cardA.onclick = () => choose(a);
   cardB.onclick = () => choose(b);
 }
@@ -195,7 +202,8 @@ function renderStandings(albums) {
     const stars = w > 0 ? "\u2605".repeat(w) : "\u2606";
     html += `<div class="tier-group"><div class="tier-label">${stars} ${w} win${w !== 1 ? "s" : ""} (${tier.length})</div><ul>`;
     for (const a of tier) {
-      html += `<li><strong>${esc(a.title)}</strong> — ${esc(a.artist)}${a.year ? ` (${a.year})` : ''}</li>`;
+      const thumb = artImg(a, 'list-art');
+      html += `<li>${thumb}<strong>${esc(a.title)}</strong> — ${esc(a.artist)}${a.year ? ` (${a.year})` : ''}</li>`;
     }
     html += "</ul></div>";
   }
@@ -225,7 +233,8 @@ function showFinalResults(ranked) {
     const tier = groups.get(w);
     html += `<div class="tier-group"><h3>Tier ${tierNum} — ${w} win${w !== 1 ? "s" : ""}</h3><ol start="${rank}">`;
     for (const a of tier) {
-      html += `<li><strong>${esc(a.title)}</strong> — ${esc(a.artist)}${a.year ? ` (${a.year})` : ''}</li>`;
+      const thumb = artImg(a, 'list-art');
+      html += `<li>${thumb}<strong>${esc(a.title)}</strong> — ${esc(a.artist)}${a.year ? ` (${a.year})` : ''}</li>`;
     }
     html += "</ol></div>";
     rank += tier.length;
