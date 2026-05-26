@@ -1,16 +1,16 @@
-// Album Ranker — Swiss-system tournament.
+// Board Game Ranker — Swiss-system tournament.
 //
 // Instead of a full merge sort (~n*log2(n) comparisons), this runs a fixed
-// number of Swiss rounds where albums with similar records are paired against
-// each other. After all rounds, albums bucket into tiers by win count.
+// number of Swiss rounds where games with similar records are paired against
+// each other. After all rounds, games bucket into tiers by win count.
 // Buchholz tiebreaker (sum of opponents' wins) orders within tiers.
 //
-// For 64 albums: 5 rounds = 160 comparisons (vs ~296 for full sort).
+// For 32 games: 5 rounds = 80 comparisons (vs ~120 for full sort).
 // Fewer rounds = fewer comparisons, coarser tiers.
 
 // --- DOM refs ---
 const setupSection = document.getElementById("setup-section");
-const albumCountEl = document.getElementById("album-count");
+const gameCountEl = document.getElementById("game-count");
 const roundSlider = document.getElementById("round-slider");
 const roundDisplay = document.getElementById("round-display");
 const comparisonEstimate = document.getElementById("comparison-estimate");
@@ -35,7 +35,7 @@ const copyBtn = document.getElementById("copy-json");
 const restartBtn = document.getElementById("restart");
 
 // --- State ---
-let stats = new Map(); // albumId -> { wins, opponents[], hadBye, buchholz }
+let stats = new Map(); // gameId -> { wins, opponents[], hadBye, buchholz }
 let comparisonsDone = 0;
 let totalComparisons = 0;
 let currentRound = 0;
@@ -60,13 +60,13 @@ function esc(str) {
 }
 
 // --- Swiss pairing ---
-// Groups albums by win count, shuffles within groups, pairs adjacent items,
-// avoids rematches when possible. Gives a bye to the lowest-ranked album
+// Groups games by win count, shuffles within groups, pairs adjacent items,
+// avoids rematches when possible. Gives a bye to the lowest-ranked game
 // if the count is odd.
-function swissPair(albums) {
+function swissPair(games) {
   // Group by wins descending
   const groups = new Map();
-  for (const a of albums) {
+  for (const a of games) {
     const w = stats.get(a.id).wins;
     if (!groups.has(w)) groups.set(w, []);
     groups.get(w).push(a);
@@ -76,23 +76,23 @@ function swissPair(albums) {
     sorted.push(...shuffle([...groups.get(k)]));
   }
 
-  // Handle odd count: bye goes to lowest album that hasn't had one yet
-  let byeAlbum = null;
+  // Handle odd count: bye goes to lowest game that hasn't had one yet
+  let byeGame = null;
   if (sorted.length % 2 !== 0) {
     for (let i = sorted.length - 1; i >= 0; i--) {
       if (!stats.get(sorted[i].id).hadBye) {
-        byeAlbum = sorted.splice(i, 1)[0];
+        byeGame = sorted.splice(i, 1)[0];
         break;
       }
     }
-    if (!byeAlbum) {
-      byeAlbum = sorted.pop();
+    if (!byeGame) {
+      byeGame = sorted.pop();
     }
-    stats.get(byeAlbum.id).wins++;
-    stats.get(byeAlbum.id).hadBye = true;
+    stats.get(byeGame.id).wins++;
+    stats.get(byeGame.id).hadBye = true;
   }
 
-  // Pair adjacent albums, preferring no rematch
+  // Pair adjacent games, preferring no rematch
   const pairs = [];
   const used = new Set();
 
@@ -114,31 +114,38 @@ function swissPair(albums) {
     }
   }
 
-  return { pairs, byeAlbum };
+  return { pairs, byeGame };
 }
 
 // --- UI: matchup ---
-function artImg(album, cls) {
-  if (typeof ALBUM_ART !== 'undefined' && ALBUM_ART[album.id]) {
-    return `<img class="${cls}" src="${esc(ALBUM_ART[album.id])}" alt="" onerror="this.remove()">`;
+function artImg(game, cls) {
+  if (typeof GAME_ART !== 'undefined' && GAME_ART[game.id]) {
+    return `<img class="${cls}" src="${esc(GAME_ART[game.id])}" alt="" onerror="this.remove()">`;
   }
   return '';
 }
 
+function cardMeta(game) {
+  const parts = [];
+  if (game.players) parts.push(`${esc(game.players)} players`);
+  if (game.time != null) parts.push(`${esc(String(game.time))} min`);
+  return parts.join(' \u00B7 ');
+}
+
 function renderMatchup(a, b) {
-  cardA.innerHTML = `${artImg(a, 'card-art')}<div class="card-text"><div class="title">${esc(a.title)}</div><div class="artist">${esc(a.artist)}</div><div class="year">${a.year ?? ''}</div></div>`;
-  cardB.innerHTML = `${artImg(b, 'card-art')}<div class="card-text"><div class="title">${esc(b.title)}</div><div class="artist">${esc(b.artist)}</div><div class="year">${b.year ?? ''}</div></div>`;
+  cardA.innerHTML = `${artImg(a, 'card-art')}<div class="card-text"><div class="title">${esc(a.title)}</div><div class="meta">${cardMeta(a)}</div></div>`;
+  cardB.innerHTML = `${artImg(b, 'card-art')}<div class="card-text"><div class="title">${esc(b.title)}</div><div class="meta">${cardMeta(b)}</div></div>`;
   cardA.onclick = () => choose(a);
   cardB.onclick = () => choose(b);
 }
 
-function choose(album) {
+function choose(game) {
   if (!pendingResolve) return;
   const r = pendingResolve;
   pendingResolve = null;
   comparisonsDone++;
   updateProgress();
-  r(album);
+  r(game);
 }
 
 function pickWinner(a, b) {
@@ -188,9 +195,9 @@ function updateProgress() {
 }
 
 // --- UI: standings (shown during tournament, updates after each round) ---
-function renderStandings(albums) {
+function renderStandings(games) {
   const groups = new Map();
-  for (const a of albums) {
+  for (const a of games) {
     const w = stats.get(a.id).wins;
     if (!groups.has(w)) groups.set(w, []);
     groups.get(w).push(a);
@@ -203,7 +210,8 @@ function renderStandings(albums) {
     html += `<div class="tier-group"><div class="tier-label">${stars} ${w} win${w !== 1 ? "s" : ""} (${tier.length})</div><ul>`;
     for (const a of tier) {
       const thumb = artImg(a, 'list-art');
-      html += `<li>${thumb}<strong>${esc(a.title)}</strong> — ${esc(a.artist)}${a.year ? ` (${a.year})` : ''}</li>`;
+      const meta = cardMeta(a);
+      html += `<li>${thumb}<strong>${esc(a.title)}</strong>${meta ? ` \u2014 <span class="list-meta">${meta}</span>` : ''}</li>`;
     }
     html += "</ul></div>";
   }
@@ -231,10 +239,11 @@ function showFinalResults(ranked) {
 
   for (const w of sortedKeys) {
     const tier = groups.get(w);
-    html += `<div class="tier-group"><h3>Tier ${tierNum} — ${w} win${w !== 1 ? "s" : ""}</h3><ol start="${rank}">`;
+    html += `<div class="tier-group"><h3>Tier ${tierNum} \u2014 ${w} win${w !== 1 ? "s" : ""}</h3><ol start="${rank}">`;
     for (const a of tier) {
       const thumb = artImg(a, 'list-art');
-      html += `<li>${thumb}<strong>${esc(a.title)}</strong> — ${esc(a.artist)}${a.year ? ` (${a.year})` : ''}</li>`;
+      const meta = cardMeta(a);
+      html += `<li>${thumb}<strong>${esc(a.title)}</strong>${meta ? ` \u2014 <span class="list-meta">${meta}</span>` : ''}</li>`;
     }
     html += "</ol></div>";
     rank += tier.length;
@@ -254,8 +263,8 @@ function showFinalResults(ranked) {
         tier: tierNum,
         id: a.id,
         title: a.title,
-        artist: a.artist,
-        year: a.year,
+        players: a.players,
+        time: a.time,
         wins: w,
       });
     }
@@ -265,21 +274,21 @@ function showFinalResults(ranked) {
 }
 
 // --- Main tournament ---
-async function runTournament(albums, numRounds) {
+async function runTournament(games, numRounds) {
   stats = new Map();
-  for (const a of albums) {
+  for (const a of games) {
     stats.set(a.id, { wins: 0, opponents: [], hadBye: false, buchholz: 0 });
   }
 
   comparisonsDone = 0;
   totalRounds = numRounds;
-  totalComparisons = Math.floor(albums.length / 2) * numRounds;
+  totalComparisons = Math.floor(games.length / 2) * numRounds;
   buildProgressBar(numRounds);
   updateProgress();
 
   for (let round = 1; round <= numRounds; round++) {
     currentRound = round;
-    const { pairs } = swissPair(albums);
+    const { pairs } = swissPair(games);
     roundMatchups = pairs.length;
     roundMatchupsDone = 0;
     updateProgress();
@@ -289,7 +298,6 @@ async function runTournament(albums, numRounds) {
       roundInfo.textContent = `Round ${round} of ${numRounds} \u2014 Matchup ${m + 1} of ${pairs.length}`;
 
       const winner = await pickWinner(a, b);
-      const loser = winner === a ? b : a;
 
       stats.get(winner.id).wins++;
       stats.get(a.id).opponents.push(b.id);
@@ -298,17 +306,17 @@ async function runTournament(albums, numRounds) {
       updateProgress();
     }
 
-    renderStandings(albums);
+    renderStandings(games);
   }
 
   // Buchholz tiebreaker: sum of opponents' final win counts
-  for (const a of albums) {
+  for (const a of games) {
     const s = stats.get(a.id);
     s.buchholz = s.opponents.reduce((sum, oppId) => sum + stats.get(oppId).wins, 0);
   }
 
   // Sort: wins desc, then Buchholz desc
-  const ranked = [...albums].sort((a, b) => {
+  const ranked = [...games].sort((a, b) => {
     const sa = stats.get(a.id);
     const sb = stats.get(b.id);
     if (sb.wins !== sa.wins) return sb.wins - sa.wins;
@@ -320,7 +328,7 @@ async function runTournament(albums, numRounds) {
 
 // --- Setup ---
 function updateEstimate() {
-  const n = ALBUMS.length;
+  const n = GAMES.length;
   const r = parseInt(roundSlider.value, 10);
   const est = Math.floor(n / 2) * r;
   roundDisplay.textContent = r;
@@ -348,29 +356,29 @@ startBtn.addEventListener("click", () => {
   matchupSection.classList.remove("hidden");
   standingsSection.classList.remove("hidden");
 
-  const shuffled = shuffle([...ALBUMS]);
+  const shuffled = shuffle([...GAMES]);
   const numRounds = parseInt(roundSlider.value, 10);
   runTournament(shuffled, numRounds);
 });
 
 // --- Boot ---
 function init() {
-  if (!Array.isArray(ALBUMS) || ALBUMS.length === 0) {
-    albumCountEl.textContent = "0";
-    comparisonEstimate.textContent = "No albums loaded. Edit albums.js.";
+  if (!Array.isArray(GAMES) || GAMES.length === 0) {
+    gameCountEl.textContent = "0";
+    comparisonEstimate.textContent = "No games loaded. Edit games.js.";
     startBtn.disabled = true;
     return;
   }
-  if (ALBUMS.length === 1) {
-    albumCountEl.textContent = "1";
-    comparisonEstimate.textContent = "Only one album — nothing to compare.";
+  if (GAMES.length === 1) {
+    gameCountEl.textContent = "1";
+    comparisonEstimate.textContent = "Only one game — nothing to compare.";
     startBtn.disabled = true;
     return;
   }
 
-  albumCountEl.textContent = ALBUMS.length;
-  const defaultRounds = 5;
-  const maxRounds = Math.min(10, ALBUMS.length - 1);
+  gameCountEl.textContent = GAMES.length;
+  const defaultRounds = 4;
+  const maxRounds = Math.min(10, GAMES.length - 1);
   roundSlider.min = 2;
   roundSlider.max = maxRounds;
   roundSlider.value = Math.min(defaultRounds, maxRounds);

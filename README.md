@@ -1,6 +1,6 @@
-# Album Ranker
+# Board Game Ranker
 
-A small static web app for ranking a list of albums by repeatedly picking the one you prefer in head-to-head matchups.
+A small static web app for ranking a list of board games by repeatedly picking the one you'd rather play in head-to-head matchups. Adapted from the original [Album Ranker](https://github.com/chrisglein/bracket-game).
 
 ## Run It
 
@@ -8,30 +8,33 @@ Just open [`index.html`](index.html) in any modern browser. No server, no build 
 
 ## How It Works
 
-- Albums are loaded from [`albums.js`](albums.js).
-- Under the hood, they're sorted using **merge sort** — every comparison the algorithm needs becomes a "pick A or B" matchup for you.
-- This guarantees a complete, correct ordering of every album in `~n*log2(n)` comparisons:
-  - 8 albums → ~17 picks
-  - 16 albums → ~49 picks
-  - 64 albums → ~296 picks
-- When sorting finishes, the full ranking displays and exports as JSON.
+- Games are loaded from [`games.js`](games.js).
+- Cover art is loaded from [`game-art-cache.js`](game-art-cache.js) (auto-generated from BoardGameGeek).
+- Ranking runs as a **Swiss-system tournament**: a fixed number of rounds where games with similar records are paired against each other. After all rounds, games bucket into tiers by win count, with a Buchholz tiebreaker (sum of opponents' wins) ordering within tiers.
+- For 32 games at 5 rounds, that's 80 comparisons producing up to 6 tiers — much less than a full sort while still giving a defensible ranking.
+- When ranking finishes, the full standing displays and exports as JSON.
 
-## Initial Test Data
+## Fetching Cover Art
 
-The bundled list is 8 picks from the HiFi vinyl wishlist (Chris's rank=1 selections). Edit `albums.js` to swap in any list — power-of-2 sizing is **not** required with this algorithm.
+BoardGameGeek's XML API and HTML pages are currently behind Cloudflare/auth and return 401/403 to scripted requests — but the image CDN (`cf.geekdo-images.com`) is open, so once we have URLs the app loads art fine.
+
+The workflow is to import a locally-saved collection page:
+
+1. In your browser (signed in to BGG), open your collection page, e.g. `https://boardgamegeek.com/collection/user/<your-user>`.
+2. Save the page (Ctrl+S) as `collection.html` in this folder. If the collection spans multiple pages, save each one as `collection-2.html`, `collection-3.html`, etc. The script reads any file matching `collection*.html`.
+3. Run `node fetch-art.js` to regenerate [`game-art-cache.js`](game-art-cache.js).
+
+The script matches games by normalized title (with a fuzzy fallback so e.g. "Quacks" in the collection matches "The Quacks of Quedlinburg" in `games.js`) and reports any misses. To resolve a miss, save a snapshot of a collection page that contains it (or any other BGG-visible page with the game's thumbnail URL), then re-run.
 
 ## Files
 
 - [`index.html`](index.html) — markup
 - [`styles.css`](styles.css) — styling
-- [`albums.js`](albums.js) — input data (edit me)
+- [`games.js`](games.js) — input data (edit me)
+- [`game-art-cache.js`](game-art-cache.js) — generated cover-art URLs
+- [`fetch-art.js`](fetch-art.js) — Node script that populates the art cache
 - [`script.js`](script.js) — ranking logic + UI
 
-## Design Notes
+## Game List
 
-The original spec asked for a single-elimination bracket with placement rounds. That approach matches the visual idea of a "bracket" but doesn't actually produce a defensible full ranking without nearly as many additional placement matches as merge sort uses anyway. Merge sort is simpler, correct by construction, and shows a partial "current standings" preview as merges complete.
-
-# To Improve
-
-- Just tried it out. Very cool. But it feels like it asks for too many comparisons. We don't need a bulletproof sort here. Rough bucketing would be enough, and if that can be done with fewer comparisons, it's worth it.
-- Full album list: [Albums.md](Albums.md)
+The bundled list is 32 board games the friend group has played together (see [`Board Game Bracket for the Boys.md`](Board%20Game%20Bracket%20for%20the%20Boys.md)). 32 is a power of 2, so no byes are needed.

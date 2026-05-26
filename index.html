@@ -2,23 +2,23 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Album Ranker</title>
+  <title>Board Game Ranker</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header>
-    <h1>Album Ranker</h1>
-    <p class="subtitle">Pick the album you prefer in each matchup. Albums land in tiers by wins.</p>
+    <h1>Board Game Ranker</h1>
+    <p class="subtitle">Pick the game you'd rather play in each matchup. Games land in tiers by wins.</p>
   </header>
 
   <main>
     <section id="setup-section">
       <h2>Setup</h2>
-      <p><span id="album-count">0</span> albums loaded</p>
+      <p><span id="game-count">0</span> games loaded</p>
       <div class="setting-row">
         <label for="round-slider">Rounds</label>
-        <input type="range" id="round-slider" min="2" max="8" value="5" />
-        <span id="round-display">5</span>
+        <input type="range" id="round-slider" min="2" max="8" value="4" />
+        <span id="round-display">4</span>
       </div>
       <p id="comparison-estimate" class="hint"></p>
       <button id="start-btn">Start Ranking</button>
@@ -30,12 +30,12 @@
     </section>
 
     <section id="matchup-section" class="hidden">
-      <h2>Which do you prefer?</h2>
+      <h2>Which would you rather play?</h2>
       <p id="round-info" class="hint"></p>
       <div id="matchup">
-        <button class="album-card" id="card-a"></button>
+        <button class="game-card" id="card-a"></button>
         <div class="vs">vs</div>
-        <button class="album-card" id="card-b"></button>
+        <button class="game-card" id="card-b"></button>
       </div>
     </section>
 
@@ -54,8 +54,8 @@
     </section>
   </main>
 
-  <script src="albums.js"></script>
-  <script src="album-art-cache.js" onerror="window.ALBUM_ART={}"></script>
+  <script src="games.js"></script>
+  <script src="game-art-cache.js" onerror="window.GAME_ART={}"></script>
   <script src="script.js"></script>
 </body>
 </html>

@@ -96,7 +96,7 @@ h3 { margin: 1rem 0 0.5rem; font-size: 1rem; }
   gap: 1rem;
 }
 
-.album-card {
+.game-card {
   background: #2f2f36;
   border: 2px solid transparent;
   border-radius: 10px;
@@ -126,12 +126,12 @@ h3 { margin: 1rem 0 0.5rem; font-size: 1rem; }
   gap: 0.1rem;
   line-height: 1.1;
 }
-.album-card:hover {
+.game-card:hover {
   background: var(--hover);
   border-color: var(--accent);
   transform: translateY(-2px);
 }
-.album-card .title {
+.game-card .title {
   font-size: 1.2rem;
   font-weight: 600;
   margin-bottom: 0.1rem;
@@ -140,12 +140,13 @@ h3 { margin: 1rem 0 0.5rem; font-size: 1rem; }
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.album-card .artist {
-  color: var(--text);
-}
-.album-card .year {
+.game-card .meta {
   color: var(--muted);
   font-size: 0.9rem;
+}
+.list-meta {
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 .vs { font-weight: bold; color: var(--accent); font-size: 1.25rem; }
