@@ -23,7 +23,7 @@ window.BRACKET = {
   link: () => null,
 
   // Suffix after the title in the standings + final results lists.
-  listLine: (item) => ` \u2014 ${item.artist}${item.year ? ` (${item.year})` : ""}`,
+  listLine: (item) => `${item.artist}${item.year ? ` (${item.year})` : ""}`,
 
   // Extra fields (besides rank/tier/id/title/wins) to include in JSON export.
   jsonFields: ["artist", "year"],
