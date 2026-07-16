@@ -33,11 +33,21 @@ All fields optional. Item-derived text is escaped by the engine, so functions re
 | --- | --- | --- |
 | `noun` / `nounPlural` | string | Labels, e.g. `"movie"` / `"movies"` |
 | `prompt` | string | Matchup heading, e.g. `"Which do you like more?"` |
-| `defaultRounds` / `maxRounds` | number | Rounds-slider default and cap |
+| `accent` | string | Brand color (hex); text / contrast / tint variants auto-derived |
+| `recommendedRounds` / `maxRounds` | number | Suggested round count (drives the "recommended" note) and the hard cap |
 | `cardLines(item)` | fn → `[{ text, className }]` | Extra lines under the title on a card (`className`: `sub` or `meta`) |
-| `link(item)` | fn → `{ href, label, site }` \| `null` | Optional external link pill (e.g. BGG, IMDb) |
+| `link(item)` | fn → `{ href, label, site }` \| `null` | Optional external-link icon (e.g. BGG, IMDb) |
 | `listLine(item)` | fn → string | Suffix after the title in standings/results |
 | `jsonFields` | string[] | Extra keys included in the JSON export |
+
+### Theming
+
+The styles default to a **light theme** with no background, so the bracket blends into a light host page. Add a modifier class to the wrapper element to change that:
+
+- `bracket--dark` — dark theme.
+- `bracket--plate` — adds a rounded background "plate" to bridge a theme mismatch when embedding on a host whose background doesn't match.
+
+Set a brand color with `accent` in the config; the engine derives the readable text color, the on-accent (button label) color, and the hover tint automatically.
 
 ## Files
 
