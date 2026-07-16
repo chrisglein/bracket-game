@@ -10,6 +10,7 @@ window.BRACKET = {
   noun: "album",
   nounPlural: "albums",
   prompt: "Which do you prefer?",
+  intro: "Pick the album you prefer in each matchup. Albums land in tiers by wins.",
   recommendedRounds: 5,
   maxRounds: 8,
 
