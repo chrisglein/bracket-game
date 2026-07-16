@@ -10,7 +10,7 @@ window.BRACKET = {
   noun: "album",
   nounPlural: "albums",
   prompt: "Which do you prefer?",
-  defaultRounds: 5,
+  recommendedRounds: 5,
   maxRounds: 8,
 
   // Extra lines shown under the title on each matchup card.
