@@ -59,6 +59,6 @@ Set a brand color with `accent` in the config; the engine derives the readable t
 - [`art-cache.js`](art-cache.js) — generated `id → image URL` map
 - [`fetch-art.js`](fetch-art.js) — album art fetcher example (`node fetch-art.js`)
 
-## Deployed Rankers
+## License
 
-This template backs several rankers on [chrisglein.com](https://chrisglein.com): the album ranker, the board game ranker, and the movie ranker. Each is a copy of these files with its own `items.js` / `config.js`.
+[MIT](LICENSE).
