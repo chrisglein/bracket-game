@@ -2,6 +2,8 @@
 
 A small, dependency-free static web app for ranking **any** list of things by repeatedly picking the one you prefer in head-to-head matchups. It's a reusable **starter template**: point it at a set of albums, board games, movies, or whatever else, and it produces a full tiered ranking.
 
+![Screenshot of the tool with 3 different media types](/bracket-game.png)
+
 ## Run It
 
 Open [`index.html`](index.html) in any modern browser. No server, no build step, no dependencies. The bundled example ranks albums.
