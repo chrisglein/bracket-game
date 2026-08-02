@@ -46,6 +46,10 @@ const listLineFn = typeof CFG.listLine === "function" ? CFG.listLine : () => "";
 const JSON_FIELDS = Array.isArray(CFG.jsonFields) ? CFG.jsonFields : [];
 
 const ITEMS = Array.isArray(window.ITEMS) ? window.ITEMS : [];
+const TITLE_COUNTS = new Map();
+for (const item of ITEMS) {
+  TITLE_COUNTS.set(item.title, (TITLE_COUNTS.get(item.title) || 0) + 1);
+}
 const ART = window.ART || {};
 
 // --- DOM refs ---
@@ -55,6 +59,11 @@ const itemCountEl = document.getElementById("item-count");
 const itemNounEl = document.getElementById("item-noun");
 const comparisonEstimate = document.getElementById("comparison-estimate");
 const startBtn = document.getElementById("start-btn");
+const resumeBtn = document.getElementById("resume-btn");
+const resumePanel = document.getElementById("resume-panel");
+const resumeText = document.getElementById("resume-text");
+const resumeImportBtn = document.getElementById("resume-import");
+const resumeError = document.getElementById("resume-error");
 
 const progressSection = document.getElementById("progress-section");
 const progressText = document.getElementById("progress-text");
@@ -118,6 +127,53 @@ function escAttr(str) {
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function itemSummary(item) {
+  const suffix = listLineFn(item) || "";
+  return suffix ? `${item.title} — ${suffix}` : item.title;
+}
+
+function rankingSummary(entry) {
+  const item = itemById(entry.id) || entry;
+  return (TITLE_COUNTS.get(item.title) || 0) > 1 ? itemSummary(item) : item.title;
+}
+
+function setResumeError(message) {
+  if (!resumeError) return;
+  if (message) {
+    resumeError.textContent = message;
+    resumeError.classList.remove("hidden");
+  } else {
+    resumeError.textContent = "";
+    resumeError.classList.add("hidden");
+  }
+}
+
+function resetTournamentUi() {
+  standingsEl.innerHTML = "";
+  currentRoundHeader = null;
+  progressBar.innerHTML = "";
+  pendingResolve = null;
+  roundMatchups = 0;
+  roundMatchupsDone = 0;
+}
+
+function renderCompletedProgress(roundsCompleted, comparisonCount, exactComparisonCount) {
+  progressBar.innerHTML = "";
+  for (let round = 1; round <= roundsCompleted; round++) {
+    addRoundPill(round);
+  }
+  const segments = progressBar.querySelectorAll(".progress-segment");
+  segments.forEach((seg) => {
+    const fill = seg.querySelector(".segment-fill");
+    fill.style.width = "100%";
+    seg.classList.add("completed");
+    seg.classList.remove("active");
+  });
+  progressText.textContent = exactComparisonCount
+    ? `Round ${roundsCompleted} · ${comparisonCount} comparison${comparisonCount !== 1 ? "s" : ""}`
+    : `Round ${roundsCompleted} · imported ranking`;
 }
 
 function itemById(id) {
@@ -366,15 +422,22 @@ function roundCapFor(itemCount) {
   return Math.max(1, Math.min(MAX_ROUNDS_CFG || hardMax, hardMax));
 }
 
+function updateProgressSubtext() {
+  if (!T || !progressSub) return;
+  const perRound = Core.comparisonsPerRound(T);
+  const n = T.active.length;
+  let text = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round`;
+  if (T.eliminated.length) {
+    text += ` · ${n} item${n !== 1 ? "s" : ""} remaining`;
+  }
+  progressSub.textContent = text;
+}
+
 function applyElimination(candidates) {
   Core.eliminate(T, candidates);
   // A smaller pool supports fewer distinct opponents, so the cap moves too.
   maxRounds = roundCapFor(T.active.length);
-  const perRound = Core.comparisonsPerRound(T);
-  const n = T.active.length;
-  if (progressSub) {
-    progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round \u00B7 ${n} item${n !== 1 ? "s" : ""} remaining`;
-  }
+  updateProgressSubtext();
 }
 
 function refreshRankingDisplay() {
@@ -564,13 +627,8 @@ function startTournament() {
   roundHistory = [];
   lastRanking = null;
   lastJsonText = "";
-  standingsEl.innerHTML = "";
-  currentRoundHeader = null;
-  progressBar.innerHTML = "";
-  const perRound = Core.comparisonsPerRound(T);
-  if (progressSub) {
-    progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round`;
-  }
+  resetTournamentUi();
+  updateProgressSubtext();
   if (elimSection) elimSection.classList.add("hidden");
   if (eliminatedTiersEl) {
     eliminatedTiersEl.classList.add("hidden");
@@ -584,6 +642,42 @@ function startTournament() {
   resultsSection.classList.add("hidden");
 
   runRound();
+}
+
+function resumeTournamentFromText(text) {
+  clearSavedState();
+  const restored = Core.importRanking(text, ITEMS, {
+    noun: NOUN,
+    nounPlural: NOUN_PLURAL,
+    listLine: listLineFn,
+    maxRounds: roundCapFor(ITEMS.length),
+  });
+
+  T = restored.tournament;
+  maxRounds = roundCapFor(T.active.length);
+  pendingEliminationCandidates = [];
+  keptIds.clear();
+  currentPairs = [];
+  currentPairIndex = 0;
+  roundHistory = [];
+  lastRanking = null;
+  lastJsonText = "";
+  resetTournamentUi();
+  updateProgressSubtext();
+  if (elimSection) elimSection.classList.add("hidden");
+  if (eliminatedTiersEl) {
+    eliminatedTiersEl.classList.add("hidden");
+    eliminatedTiersEl.innerHTML = "";
+  }
+  renderCompletedProgress(T.round, T.comparisons, restored.exactComparisonCount);
+
+  setupSection.classList.add("hidden");
+  progressSection.classList.remove("hidden");
+  standingsSection.classList.add("hidden");
+  matchupSection.classList.add("hidden");
+  resultsSection.classList.add("hidden");
+
+  renderResultsView({ eliminationPromptVisible: false });
 }
 
 // --- Actions ---
@@ -612,7 +706,10 @@ copyBtn.addEventListener("click", async () => {
 if (emailBtn) {
   emailBtn.addEventListener("click", () => {
     if (!lastRanking || !lastRanking.length) return;
-    const { subject, body } = Core.buildEmailContent(lastRanking, { noun: NOUN });
+    const { subject, body } = Core.buildEmailContent(lastRanking, {
+      noun: NOUN,
+      entryLine: rankingSummary,
+    });
     window.location.href =
       `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   });
@@ -660,11 +757,33 @@ if (anotherRoundBtn) {
     if (T.round >= maxRounds) return;
     resultsSection.classList.add("hidden");
     matchupSection.classList.remove("hidden");
+    standingsSection.classList.remove("hidden");
     runRound();
   });
 }
 
 startBtn.addEventListener("click", startTournament);
+
+if (resumeBtn && resumePanel) {
+  resumeBtn.addEventListener("click", () => {
+    resumePanel.classList.toggle("hidden");
+    setResumeError("");
+    if (!resumePanel.classList.contains("hidden") && resumeText) {
+      resumeText.focus();
+    }
+  });
+}
+
+if (resumeImportBtn && resumeText) {
+  resumeImportBtn.addEventListener("click", () => {
+    setResumeError("");
+    try {
+      resumeTournamentFromText(resumeText.value);
+    } catch (error) {
+      setResumeError(error instanceof Error ? error.message : "Could not parse the pasted export.");
+    }
+  });
+}
 
 // --- Accent color (optional) ---
 function hexToRgb(hex) {
@@ -716,12 +835,14 @@ function init() {
     itemCountEl.textContent = "0";
     comparisonEstimate.textContent = `No ${NOUN_PLURAL} loaded. Edit the data file.`;
     startBtn.disabled = true;
+    if (resumeBtn) resumeBtn.disabled = true;
     return;
   }
   if (ITEMS.length === 1) {
     itemCountEl.textContent = "1";
     comparisonEstimate.textContent = `Only one ${NOUN}, nothing to compare.`;
     startBtn.disabled = true;
+    if (resumeBtn) resumeBtn.disabled = true;
     return;
   }
 

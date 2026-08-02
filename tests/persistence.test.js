@@ -178,6 +178,39 @@ test("a session roundtrip preserves the cursor, pairings, and log", () => {
   assert.strictEqual(restored.tournament.comparisons, t.comparisons);
 });
 
+test("an imported ranking can be saved and restored as a session", async () => {
+  const items = makeItems(17);
+  const t = Core.createTournament(items, { rng: makeRng(117) });
+  await playChecked(t, 3, randomDecider(makeRng(118)), "imported session seed");
+  Core.eliminate(t, Core.eliminationCandidates(t));
+
+  const imported = Core.importRanking(JSON.stringify(Core.buildJson(t)), items, {
+    noun: "item",
+    nounPlural: "items",
+    maxRounds: items.length - 1,
+  });
+  const session = {
+    view: "results",
+    roundMatchups: 0,
+    roundMatchupsDone: 0,
+    currentPairIndex: 0,
+    currentPairs: [],
+    roundHistory: [],
+    eliminationPromptVisible: false,
+    keptIds: [],
+  };
+
+  const restored = Core.restoreSession(items, throughJson(Core.snapshotSession(imported.tournament, session)));
+  assert.ok(restored, "restore should succeed");
+  assert.strictEqual(restored.view, "results");
+  assert.deepStrictEqual(restored.tournament.active.map((item) => item.id), imported.tournament.active.map((item) => item.id));
+  assert.deepStrictEqual(
+    restored.tournament.eliminated.map((item) => item.id),
+    imported.tournament.eliminated.map((item) => item.id)
+  );
+  assert.deepStrictEqual(Core.buildJson(restored.tournament), Core.buildJson(imported.tournament));
+});
+
 test("a restored session finishes the round it was interrupted in", () => {
   const { t, pairs, session } = interruptedSession(fruits, 111);
 

@@ -379,6 +379,11 @@
     return json;
   }
 
+  function itemSummary(item, options) {
+    const line = options && typeof options.listLine === "function" ? options.listLine(item) : "";
+    return line ? `${item.title} — ${line}` : item.title;
+  }
+
   // Builds a compact, tier-grouped ranking for an email body. Capped so the
   // whole mailto: URL stays within what mail clients accept; truncation lands
   // on a line break rather than cutting an item in half.
@@ -387,6 +392,9 @@
     const noun = opts.noun || "item";
     const maxLength = opts.maxLength || 4000;
     const subject = `My ${noun} ranking`;
+    const entryLine = typeof opts.entryLine === "function"
+      ? opts.entryLine
+      : (entry) => entry.title;
 
     const lines = [];
     let lastHeading = null;
@@ -397,7 +405,7 @@
         lines.push(`## ${heading}`);
         lastHeading = heading;
       }
-      lines.push(e.title);
+      lines.push(entryLine(e) || e.title);
     }
 
     let body = lines.join("\n");
@@ -412,6 +420,224 @@
       body += note;
     }
     return { subject, body };
+  }
+
+  function parseJsonImport(text, itemsById) {
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(parsed)) {
+      throw new Error("JSON exports must be an array of ranked entries.");
+    }
+    return parsed.map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        throw new Error("JSON exports must contain objects for each ranked item.");
+      }
+      const item = itemsById.get(String(entry.id));
+      if (!item) {
+        throw new Error("The pasted JSON does not match the loaded items.");
+      }
+      return {
+        item,
+        wins: entry.wins,
+        eliminated: !!entry.eliminated,
+      };
+    });
+  }
+
+  function parseEmailImport(text, items, options) {
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (!lines.length || !lines.some((line) => /^##\s+(\d+\s+wins?|eliminated)$/i.test(line))) {
+      return null;
+    }
+
+    const itemsBySummary = new Map();
+    const uniqueTitles = new Map();
+    for (const item of items) {
+      itemsBySummary.set(itemSummary(item, options), item);
+      uniqueTitles.set(item.title, (uniqueTitles.get(item.title) || 0) + 1);
+    }
+
+    const entries = [];
+    let current = null;
+    for (const line of lines) {
+      const winsHeader = line.match(/^##\s+(\d+)\s+wins?$/i);
+      if (winsHeader) {
+        current = { wins: Number(winsHeader[1]), eliminated: false };
+        continue;
+      }
+      if (/^##\s+eliminated$/i.test(line)) {
+        current = { wins: 0, eliminated: true };
+        continue;
+      }
+      if (/^\(truncated,/i.test(line)) {
+        throw new Error("Truncated email exports cannot be resumed. Use Copy JSON for the full ranking.");
+      }
+      if (!current) {
+        throw new Error("Each email section must start with a '## N Wins' heading.");
+      }
+      const item =
+        itemsBySummary.get(line) ||
+        (uniqueTitles.get(line) === 1 ? items.find((candidate) => candidate.title === line) : null);
+      if (!item) {
+        throw new Error(`Could not match this imported line to a loaded item: ${line}`);
+      }
+      entries.push({
+        item,
+        wins: current.wins,
+        eliminated: current.eliminated,
+      });
+    }
+
+    return entries;
+  }
+
+  function validateImportedEntries(entries, items, options) {
+    const opts = options || {};
+    const noun = opts.noun || "item";
+    const nounPlural = opts.nounPlural || `${noun}s`;
+
+    if (!entries.length) {
+      throw new Error("No ranking entries were found in the pasted export.");
+    }
+    if (entries.length !== items.length) {
+      throw new Error(`Expected ${items.length} ${nounPlural} in the export, found ${entries.length}.`);
+    }
+
+    const seen = new Set();
+    const winsById = new Map();
+    const activeItems = [];
+    const eliminatedItems = [];
+    let maxWins = 0;
+    let lastWins = Infinity;
+    let sawEliminated = false;
+    let totalWins = 0;
+
+    for (const entry of entries) {
+      if (!entry || !entry.item) {
+        throw new Error("The pasted export does not match the loaded items.");
+      }
+      if (seen.has(entry.item.id)) {
+        throw new Error(`Duplicate ${noun} found in the pasted export: ${entry.item.title}.`);
+      }
+      if (!Number.isInteger(entry.wins) || entry.wins < 0) {
+        throw new Error("Each imported entry must include a whole-number win count.");
+      }
+      if (entry.eliminated) {
+        sawEliminated = true;
+        if (entry.wins !== 0) {
+          throw new Error("Eliminated imports must stay at 0 wins.");
+        }
+        eliminatedItems.push(entry.item);
+      } else {
+        if (sawEliminated) {
+          throw new Error("Eliminated imports must come after the ranked results.");
+        }
+        if (entry.wins > lastWins) {
+          throw new Error("Imported rankings must stay sorted from most wins to fewest wins.");
+        }
+        activeItems.push(entry.item);
+        maxWins = Math.max(maxWins, entry.wins);
+        lastWins = entry.wins;
+      }
+      seen.add(entry.item.id);
+      winsById.set(entry.item.id, entry.wins);
+      totalWins += entry.wins;
+    }
+
+    if (maxWins < 1) {
+      throw new Error("The pasted export does not include any completed rounds to resume from.");
+    }
+
+    return {
+      maxWins,
+      winsById,
+      activeItems,
+      eliminatedItems,
+      hasEliminated: sawEliminated,
+      totalWins,
+    };
+  }
+
+  // An export records wins, not rounds. While the pool is intact every round
+  // hands out exactly ceil(n/2) wins — floor(n/2) matchups plus a bye when the
+  // count is odd — so the round count and the bye count divide back out. The
+  // top score alone would undercount: a lone leader who is paired down and
+  // loses leaves the whole field a win short of the round number.
+  //
+  // A trimmed pool breaks the arithmetic, since the round it shrank in is not
+  // recorded. There the top score is the best available floor, and the split
+  // between matchups and byes is unknowable — hence `exact`.
+  function inferProgress(validated, itemCount) {
+    const winsPerRound = Math.ceil(itemCount / 2);
+    const rounds = validated.totalWins / winsPerRound;
+    if (validated.hasEliminated || !Number.isInteger(rounds) || rounds < validated.maxWins) {
+      return {
+        rounds: validated.maxWins,
+        comparisons: validated.totalWins,
+        byesAwarded: 0,
+        exact: false,
+      };
+    }
+    const byesAwarded = (itemCount % 2) * rounds;
+    return {
+      rounds,
+      comparisons: validated.totalWins - byesAwarded,
+      byesAwarded,
+      exact: true,
+    };
+  }
+
+  function importRanking(text, items, options) {
+    const opts = options || {};
+    const trimmed = String(text == null ? "" : text).trim();
+    if (!trimmed) {
+      throw new Error("Paste exported JSON or email text to resume.");
+    }
+
+    const itemList = Array.isArray(items) ? items : [];
+    const itemsById = new Map(itemList.map((item) => [String(item.id), item]));
+    const entries =
+      parseJsonImport(trimmed, itemsById) ||
+      parseEmailImport(trimmed, itemList, options);
+    if (!entries) {
+      throw new Error("Paste exported JSON or the email body generated by this app.");
+    }
+
+    const validated = validateImportedEntries(entries, itemList, options);
+    const progress = inferProgress(validated, itemList.length);
+    const maxRounds = opts.maxRounds == null ? Math.max(1, itemList.length - 1) : opts.maxRounds;
+    if (progress.rounds > maxRounds) {
+      throw new Error(`This export shows ${progress.rounds} rounds, but the loaded setup only supports ${maxRounds}.`);
+    }
+
+    const tournament = createTournament(itemList);
+    tournament.active = validated.activeItems.slice();
+    tournament.eliminated = validated.eliminatedItems.slice();
+    tournament.round = progress.rounds;
+    tournament.comparisons = progress.comparisons;
+    tournament.byesAwarded = progress.byesAwarded;
+
+    // Wins are all an export carries. Who played whom, and who sat out, is
+    // gone, so a resumed run can repeat a matchup and Buchholz restarts from
+    // the rounds still to come.
+    for (const item of itemList) {
+      const s = tournament.stats.get(item.id);
+      s.wins = validated.winsById.get(item.id) || 0;
+      s.byes = 0;
+      s.opponents = [];
+      s.hadBye = false;
+      s.buchholz = 0;
+    }
+
+    return {
+      tournament,
+      roundsCompleted: progress.rounds,
+      exactComparisonCount: progress.exact,
+    };
   }
 
   // --- Elimination ---
@@ -452,6 +678,7 @@
     tiers,
     buildJson,
     buildEmailContent,
+    importRanking,
     eliminationCandidates,
     eliminate,
     comparisonsPerRound,

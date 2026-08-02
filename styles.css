@@ -390,6 +390,33 @@ body {
 #bracket .setting-row input[type="range"] { flex: 1; accent-color: var(--accent); }
 #bracket #round-display { font-weight: 600; font-size: 1.1rem; min-width: 2ch; text-align: center; }
 
+#bracket .setup-actions,
+#bracket .resume-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+#bracket .resume-panel {
+  margin-top: 1rem;
+}
+#bracket .resume-panel label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+#bracket .resume-actions {
+  margin-top: 0.75rem;
+}
+#bracket .resume-actions .hint {
+  margin: 0;
+}
+#bracket .resume-error {
+  margin: 0.75rem 0 0;
+  color: #b42318;
+  font-weight: 600;
+}
+
 #bracket #start-btn {
   padding: 0.75rem 2rem;
   background: var(--accent);
@@ -402,6 +429,21 @@ body {
 }
 #bracket #start-btn:hover { filter: brightness(1.1); }
 #bracket #start-btn:disabled { opacity: 0.4; cursor: default; }
+#bracket #setup-section button.secondary,
+#bracket #resume-import {
+  padding: 0.75rem 1.25rem;
+  background: var(--card-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+#bracket #setup-section button.secondary:hover,
+#bracket #resume-import:hover {
+  border-color: var(--accent);
+}
 
 @media (max-width: 600px) {
   #bracket {
