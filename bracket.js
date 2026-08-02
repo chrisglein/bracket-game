@@ -80,10 +80,7 @@ const emailBtn = document.getElementById("email-results");
 const restartBtn = document.getElementById("restart");
 
 const elimSection = document.getElementById("elimination-section");
-const elimRoundCountEl = document.getElementById("elim-round-count");
-const elimCountEl = document.getElementById("elim-count");
-const elimPluralEl = document.getElementById("elim-plural");
-const elimHaveEl = document.getElementById("elim-have");
+const elimHintEl = document.getElementById("elim-hint");
 const elimListEl = document.getElementById("elimination-list");
 const eliminateBtn = document.getElementById("eliminate-btn");
 const keepAllBtn = document.getElementById("keep-all-btn");
@@ -265,18 +262,17 @@ function showEliminationPrompt(candidates) {
     return;
   }
   pendingEliminationCandidates = candidates;
-  if (elimRoundCountEl) elimRoundCountEl.textContent = T.round;
-  if (elimCountEl) elimCountEl.textContent = candidates.length;
-  if (elimPluralEl) elimPluralEl.textContent = candidates.length !== 1 ? "s" : "";
-  if (elimHaveEl) elimHaveEl.textContent = candidates.length !== 1 ? "ve" : "s";
-  if (elimListEl) {
-    elimListEl.innerHTML = candidates
-      .map(item => {
-        const sub = listLineFn(item);
-        return `<li>${esc(item.title)}${sub ? `<span class="elim-sub">${esc(sub)}</span>` : ""}</li>`;
-      })
-      .join("");
-  }
+  const n = candidates.length;
+  elimHintEl.textContent =
+    `After ${T.round} rounds, ${n} ${n === 1 ? "item" : "items"} still ${n === 1 ? "has" : "have"} ` +
+    `0 wins and cannot reach the top tiers. Eliminating them reduces future comparisons; ` +
+    `they will still appear at the bottom of the final ranking.`;
+  elimListEl.innerHTML = candidates
+    .map((item) => {
+      const sub = listLineFn(item);
+      return `<li>${esc(item.title)}${sub ? `<span class="elim-sub">${esc(sub)}</span>` : ""}</li>`;
+    })
+    .join("");
   elimSection.classList.remove("hidden");
 }
 
@@ -287,11 +283,8 @@ function renderEliminatedSection() {
     eliminatedTiersEl.innerHTML = "";
     return;
   }
-  const sorted = [...T.eliminated].sort(
-    (a, b) => T.stats.get(b.id).wins - T.stats.get(a.id).wins
-  );
   let html = `<div class="tier-group elim-tier-group"><h3>Eliminated (${T.eliminated.length})</h3><ol>`;
-  for (const a of sorted) {
+  for (const a of T.eliminated) {
     const w = T.stats.get(a.id).wins;
     const thumb = artImg(a, "list-art");
     const sub = listLineFn(a) || "";
@@ -302,8 +295,15 @@ function renderEliminatedSection() {
   eliminatedTiersEl.classList.remove("hidden");
 }
 
+function roundCapFor(itemCount) {
+  const hardMax = Math.max(1, itemCount - 1);
+  return Math.max(1, Math.min(MAX_ROUNDS_CFG || hardMax, hardMax));
+}
+
 function applyElimination(candidates) {
   Core.eliminate(T, candidates);
+  // A smaller pool supports fewer distinct opponents, so the cap moves too.
+  maxRounds = roundCapFor(T.active.length);
   const perRound = Core.comparisonsPerRound(T);
   const n = T.active.length;
   if (progressSub) {
@@ -364,6 +364,7 @@ async function runRound() {
 
 function startTournament() {
   T = Core.createTournament(ITEMS);
+  maxRounds = roundCapFor(ITEMS.length);
   pendingEliminationCandidates = [];
   standingsEl.innerHTML = "";
   currentRoundHeader = null;
@@ -410,41 +411,10 @@ copyBtn.addEventListener("click", async () => {
   }
 });
 
-// Build a compact, tier-grouped ranking for the email body, capped to a length
-// that most mail clients accept in a mailto: URL (~2000 chars encoded).
-function buildEmailContent() {
-  const subject = `My ${NOUN} ranking`;
-  const lines = [];
-  let lastTier = null;
-  for (const e of lastRanking) {
-    if (e.tier !== lastTier) {
-      if (lines.length) lines.push("");
-      lines.push(`## ${e.wins} Win${e.wins !== 1 ? "s" : ""}`);
-      lastTier = e.tier;
-    }
-    lines.push(e.title);
-  }
-  let body = lines.join("\n");
-  // Cap the whole mailto for broad client support. Modern clients handle far
-  // more; this just keeps a clean truncation instead of a silent mid-item cut.
-  const MAX = 4000;
-  const overhead = subject.length + 30;
-  if (encodeURIComponent(body).length + overhead > MAX) {
-    const note = "\n(truncated, use Copy JSON for the full ranking)";
-    while (body.length && encodeURIComponent(body + note).length + overhead > MAX) {
-      const cut = body.lastIndexOf("\n");
-      if (cut < 0) break;
-      body = body.slice(0, cut);
-    }
-    body += note;
-  }
-  return { subject, body };
-}
-
 if (emailBtn) {
   emailBtn.addEventListener("click", () => {
     if (!lastRanking || !lastRanking.length) return;
-    const { subject, body } = buildEmailContent();
+    const { subject, body } = Core.buildEmailContent(lastRanking, { noun: NOUN });
     window.location.href =
       `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   });
@@ -544,8 +514,7 @@ function init() {
   }
 
   itemCountEl.textContent = ITEMS.length;
-  const hardMax = ITEMS.length - 1;
-  maxRounds = Math.max(1, Math.min(MAX_ROUNDS_CFG || hardMax, hardMax));
+  maxRounds = roundCapFor(ITEMS.length);
   const recDefault = Math.max(2, Math.ceil(Math.log2(ITEMS.length)));
   recommendedRounds = Math.min(RECOMMENDED_ROUNDS_CFG || recDefault, maxRounds);
   const perRound = Math.floor(ITEMS.length / 2);

@@ -21,6 +21,10 @@
   "use strict";
 
   // Rounds completed before a 0-win item may be offered up for elimination.
+  // Earlier than this is just the normal Swiss distribution: half the field is
+  // winless after round 1 and a quarter after round 2. By round 3 a winless
+  // item has lost every chance to show quality. Note a bye counts as a win, so
+  // an item that sat out a round is shielded.
   const ELIMINATION_MIN_ROUND = 3;
   // A matchup needs two items, so never trim the pool below this.
   const MIN_ACTIVE_AFTER_ELIMINATION = 2;
@@ -206,6 +210,41 @@
     return json;
   }
 
+  // Builds a compact, tier-grouped ranking for an email body. Capped so the
+  // whole mailto: URL stays within what mail clients accept; truncation lands
+  // on a line break rather than cutting an item in half.
+  function buildEmailContent(ranking, options) {
+    const opts = options || {};
+    const noun = opts.noun || "item";
+    const maxLength = opts.maxLength || 4000;
+    const subject = `My ${noun} ranking`;
+
+    const lines = [];
+    let lastHeading = null;
+    for (const e of ranking) {
+      const heading = e.eliminated ? "Eliminated" : `${e.wins} Win${e.wins !== 1 ? "s" : ""}`;
+      if (heading !== lastHeading) {
+        if (lines.length) lines.push("");
+        lines.push(`## ${heading}`);
+        lastHeading = heading;
+      }
+      lines.push(e.title);
+    }
+
+    let body = lines.join("\n");
+    const overhead = subject.length + 30;
+    if (encodeURIComponent(body).length + overhead > maxLength) {
+      const note = "\n(truncated, use Copy JSON for the full ranking)";
+      while (body.length && encodeURIComponent(body + note).length + overhead > maxLength) {
+        const cut = body.lastIndexOf("\n");
+        if (cut < 0) break;
+        body = body.slice(0, cut);
+      }
+      body += note;
+    }
+    return { subject, body };
+  }
+
   // --- Elimination ---
   function eliminationCandidates(t) {
     if (t.round < t.eliminationMinRound) return [];
@@ -238,6 +277,7 @@
     computeRanking,
     tiers,
     buildJson,
+    buildEmailContent,
     eliminationCandidates,
     eliminate,
     comparisonsPerRound,

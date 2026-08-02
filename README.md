@@ -15,6 +15,7 @@ Instead of a full sort (`~n*log2(n)` comparisons), the app runs a **Swiss-system
 - Fewer rounds → fewer comparisons, coarser tiers. You choose the number of rounds with a slider.
 - For 64 items: 5 rounds = 160 comparisons (vs. ~296 for a full sort).
 - Any list size works — power-of-2 sizing is **not** required (odd counts get a bye each round).
+- From round 3 on, if any items still have 0 wins, you're offered the chance to trim them from later rounds. They stay in the results, in an **Eliminated** section, and in the export.
 - When the rounds finish, the full ranking displays and exports as JSON.
 
 ## Make Your Own Ranker

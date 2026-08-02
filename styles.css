@@ -295,7 +295,8 @@ body {
   margin-bottom: 1rem;
 }
 #bracket .results-primary button,
-#bracket .results-actions button {
+#bracket .results-actions button,
+#bracket .elim-actions button {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -309,7 +310,8 @@ body {
   cursor: pointer;
 }
 #bracket .results-primary button:hover,
-#bracket .results-actions button:hover { border-color: var(--accent); }
+#bracket .results-actions button:hover,
+#bracket .elim-actions button:hover { border-color: var(--accent); }
 #bracket button.primary {
   background: var(--accent);
   color: var(--on-accent);
@@ -337,40 +339,16 @@ body {
   padding-left: 1.25rem;
   font-size: 0.9rem;
 }
-#bracket .elim-list li {
-  padding: 0.15rem 0;
-  display: flex;
-  align-items: baseline;
-  gap: 0.4rem;
-}
+#bracket .elim-list li { padding: 0.15rem 0; }
 #bracket .elim-sub {
   color: var(--muted);
   font-size: 0.8rem;
+  margin-left: 0.4rem;
 }
 #bracket .elim-actions {
   display: flex;
   gap: 0.5rem;
 }
-#bracket .elim-actions button {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.5rem 0.85rem;
-  border: 1px solid var(--border);
-  background: var(--card-bg);
-  color: var(--text);
-  border-radius: 6px;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-#bracket .elim-actions button:hover { border-color: var(--accent); }
-#bracket .elim-actions button.primary {
-  background: var(--accent);
-  color: var(--on-accent);
-  border-color: var(--accent);
-}
-#bracket .elim-actions button.primary:hover { filter: brightness(1.1); }
 
 /* Eliminated items section */
 #bracket .elim-tier-group { opacity: 0.65; }
