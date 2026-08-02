@@ -1,5 +1,9 @@
 // Bracket — a config-driven, pairwise ranking engine (Swiss-system tournament).
 //
+// This file is the UI layer: rendering, event wiring, and progress display.
+// The ranking itself — pairing, scoring, tiers, elimination, export — lives in
+// bracket-core.js, which is DOM-free and unit tested.
+//
 // This file is media-agnostic. It ranks any list of items by repeatedly asking
 // the user to pick a winner between two of them. It runs Swiss rounds where
 // items with similar records are paired against each other; after each round
@@ -85,9 +89,8 @@ const eliminateBtn = document.getElementById("eliminate-btn");
 const keepAllBtn = document.getElementById("keep-all-btn");
 
 // --- State ---
-let stats = new Map(); // itemId -> { wins, opponents[], hadBye, buchholz }
-let comparisonsDone = 0;
-let currentRound = 0;
+const Core = window.BracketCore;
+let T = null; // current tournament state, owned by bracket-core.js
 let roundMatchups = 0;
 let roundMatchupsDone = 0;
 let pendingResolve = null;
@@ -96,19 +99,9 @@ let lastJsonText = "";
 let maxRounds = 0;
 let recommendedRounds = 0;
 let currentRoundHeader = null;
-let tourneyItems = [];
-let eliminatedItems = [];
 let pendingEliminationCandidates = [];
 
 // --- Utilities ---
-function shuffle(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-
 function esc(str) {
   const d = document.createElement("div");
   d.textContent = str == null ? "" : String(str);
@@ -121,63 +114,6 @@ function escAttr(str) {
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-}
-
-// --- Swiss pairing ---
-// Groups items by win count, shuffles within groups, pairs adjacent items,
-// avoids rematches when possible. Gives a bye to the lowest-ranked item
-// if the count is odd.
-function swissPair(items) {
-  const groups = new Map();
-  for (const a of items) {
-    const w = stats.get(a.id).wins;
-    if (!groups.has(w)) groups.set(w, []);
-    groups.get(w).push(a);
-  }
-  const sorted = [];
-  for (const k of [...groups.keys()].sort((a, b) => b - a)) {
-    sorted.push(...shuffle([...groups.get(k)]));
-  }
-
-  // Handle odd count: bye goes to the lowest item that hasn't had one yet.
-  let byeItem = null;
-  if (sorted.length % 2 !== 0) {
-    for (let i = sorted.length - 1; i >= 0; i--) {
-      if (!stats.get(sorted[i].id).hadBye) {
-        byeItem = sorted.splice(i, 1)[0];
-        break;
-      }
-    }
-    if (!byeItem) {
-      byeItem = sorted.pop();
-    }
-    stats.get(byeItem.id).wins++;
-    stats.get(byeItem.id).hadBye = true;
-  }
-
-  // Pair adjacent items, preferring no rematch.
-  const pairs = [];
-  const used = new Set();
-
-  for (let i = 0; i < sorted.length; i++) {
-    if (used.has(sorted[i].id)) continue;
-    const faced = new Set(stats.get(sorted[i].id).opponents);
-    let bestJ = -1;
-
-    for (let j = i + 1; j < sorted.length; j++) {
-      if (used.has(sorted[j].id)) continue;
-      if (!faced.has(sorted[j].id)) { bestJ = j; break; }
-      if (bestJ === -1) bestJ = j; // fallback: allow rematch
-    }
-
-    if (bestJ !== -1) {
-      pairs.push([sorted[i], sorted[bestJ]]);
-      used.add(sorted[i].id);
-      used.add(sorted[bestJ].id);
-    }
-  }
-
-  return { pairs, byeItem };
 }
 
 // --- UI: matchup ---
@@ -232,8 +168,6 @@ function choose(item) {
   if (!pendingResolve) return;
   const r = pendingResolve;
   pendingResolve = null;
-  comparisonsDone++;
-  updateProgress();
   r(item);
 }
 
@@ -262,11 +196,11 @@ function updateProgress() {
   segments.forEach((seg) => {
     const r = parseInt(seg.dataset.round, 10);
     const fill = seg.querySelector(".segment-fill");
-    if (r < currentRound) {
+    if (r < T.round) {
       fill.style.width = "100%";
       seg.classList.add("completed");
       seg.classList.remove("active");
-    } else if (r === currentRound) {
+    } else if (r === T.round) {
       const pct = roundMatchups > 0 ? Math.round((roundMatchupsDone / roundMatchups) * 100) : 0;
       fill.style.width = pct + "%";
       seg.classList.add("active");
@@ -276,7 +210,8 @@ function updateProgress() {
       seg.classList.remove("active", "completed");
     }
   });
-  progressText.textContent = `Round ${currentRound} \u00B7 ${comparisonsDone} comparison${comparisonsDone !== 1 ? "s" : ""}`;
+  const n = T.comparisons;
+  progressText.textContent = `Round ${T.round} \u00B7 ${n} comparison${n !== 1 ? "s" : ""}`;
 }
 
 // --- UI: comparison log (newest at the top, dividers between rounds) ---
@@ -306,89 +241,21 @@ function logComparison(n, winner, loser) {
 }
 
 // --- UI: final tier list ---
-function tierListHtml(items) {
-  const groups = new Map();
-  for (const a of items) {
-    const w = stats.get(a.id).wins;
-    if (!groups.has(w)) groups.set(w, []);
-    groups.get(w).push(a);
-  }
-
-  const sortedKeys = [...groups.keys()].sort((a, b) => b - a);
+function tierListHtml(groups) {
   let html = "";
-  let rank = 1;
-  let tierNum = 1;
-
-  for (const w of sortedKeys) {
-    const tier = groups.get(w);
-    html += `<div class="tier-group"><h3>Tier ${tierNum} \u00B7 ${w} win${w !== 1 ? "s" : ""}</h3><ol start="${rank}">`;
-    for (const a of tier) {
+  for (const group of groups) {
+    html += `<div class="tier-group"><h3>Tier ${group.tier} \u00B7 ${group.wins} win${group.wins !== 1 ? "s" : ""}</h3><ol start="${group.startRank}">`;
+    for (const a of group.items) {
       const thumb = artImg(a, "list-art");
       const sub = listLineFn(a) || "";
       html += `<li>${thumb}<span class="tier-title">${esc(a.title)}</span>${sub ? `<span class="list-sub">${esc(sub)}</span>` : ""}</li>`;
     }
     html += "</ol></div>";
-    rank += tier.length;
-    tierNum++;
   }
   return html;
 }
 
-// --- Ranking + results ---
-function computeRanking(items) {
-  for (const a of items) {
-    const s = stats.get(a.id);
-    s.buchholz = s.opponents.reduce((sum, oppId) => sum + stats.get(oppId).wins, 0);
-  }
-  return [...items].sort((a, b) => {
-    const sa = stats.get(a.id);
-    const sb = stats.get(b.id);
-    if (sb.wins !== sa.wins) return sb.wins - sa.wins;
-    return sb.buchholz - sa.buchholz;
-  });
-}
-
-function buildJson(ranked) {
-  const groups = new Map();
-  for (const a of ranked) {
-    const w = stats.get(a.id).wins;
-    if (!groups.has(w)) groups.set(w, []);
-    groups.get(w).push(a);
-  }
-  const sortedKeys = [...groups.keys()].sort((a, b) => b - a);
-  let rank = 1;
-  let tierNum = 1;
-  const json = [];
-  for (const w of sortedKeys) {
-    for (const a of groups.get(w)) {
-      const entry = { rank: rank++, tier: tierNum, id: a.id, title: a.title, wins: w };
-      for (const f of JSON_FIELDS) {
-        if (a[f] !== undefined) entry[f] = a[f];
-      }
-      json.push(entry);
-    }
-    tierNum++;
-  }
-  // Append eliminated items at the end with eliminated: true
-  for (const a of eliminatedItems) {
-    const w = stats.get(a.id).wins;
-    const entry = { rank: null, tier: null, id: a.id, title: a.title, wins: w, eliminated: true };
-    for (const f of JSON_FIELDS) {
-      if (a[f] !== undefined) entry[f] = a[f];
-    }
-    json.push(entry);
-  }
-  return json;
-}
-
 // --- Elimination ---
-function getEliminationCandidates() {
-  if (currentRound < 3) return [];
-  const candidates = tourneyItems.filter(item => stats.get(item.id).wins === 0);
-  // Safety: require at least 2 items to remain in the active pool
-  if (tourneyItems.length - candidates.length < 2) return [];
-  return candidates;
-}
 
 function showEliminationPrompt(candidates) {
   if (!elimSection) return;
@@ -398,7 +265,7 @@ function showEliminationPrompt(candidates) {
     return;
   }
   pendingEliminationCandidates = candidates;
-  if (elimRoundCountEl) elimRoundCountEl.textContent = currentRound;
+  if (elimRoundCountEl) elimRoundCountEl.textContent = T.round;
   if (elimCountEl) elimCountEl.textContent = candidates.length;
   if (elimPluralEl) elimPluralEl.textContent = candidates.length !== 1 ? "s" : "";
   if (elimHaveEl) elimHaveEl.textContent = candidates.length !== 1 ? "ve" : "s";
@@ -415,17 +282,17 @@ function showEliminationPrompt(candidates) {
 
 function renderEliminatedSection() {
   if (!eliminatedTiersEl) return;
-  if (eliminatedItems.length === 0) {
+  if (T.eliminated.length === 0) {
     eliminatedTiersEl.classList.add("hidden");
     eliminatedTiersEl.innerHTML = "";
     return;
   }
-  const sorted = [...eliminatedItems].sort(
-    (a, b) => stats.get(b.id).wins - stats.get(a.id).wins
+  const sorted = [...T.eliminated].sort(
+    (a, b) => T.stats.get(b.id).wins - T.stats.get(a.id).wins
   );
-  let html = `<div class="tier-group elim-tier-group"><h3>Eliminated (${eliminatedItems.length})</h3><ol>`;
+  let html = `<div class="tier-group elim-tier-group"><h3>Eliminated (${T.eliminated.length})</h3><ol>`;
   for (const a of sorted) {
-    const w = stats.get(a.id).wins;
+    const w = T.stats.get(a.id).wins;
     const thumb = artImg(a, "list-art");
     const sub = listLineFn(a) || "";
     html += `<li class="elim-item">${thumb}<span class="tier-title">${esc(a.title)}</span>${sub ? `<span class="list-sub">${esc(sub)}</span>` : ""}<span class="elim-badge">${w} win${w !== 1 ? "s" : ""}</span></li>`;
@@ -436,41 +303,41 @@ function renderEliminatedSection() {
 }
 
 function applyElimination(candidates) {
-  const ids = new Set(candidates.map(i => i.id));
-  eliminatedItems.push(...candidates);
-  tourneyItems = tourneyItems.filter(i => !ids.has(i.id));
-  // Update the per-round comparison estimate in the progress section
-  const perRound = Math.floor(tourneyItems.length / 2);
+  Core.eliminate(T, candidates);
+  const perRound = Core.comparisonsPerRound(T);
+  const n = T.active.length;
   if (progressSub) {
-    progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round \u00B7 ${tourneyItems.length} item${tourneyItems.length !== 1 ? "s" : ""} remaining`;
+    progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round \u00B7 ${n} item${n !== 1 ? "s" : ""} remaining`;
   }
 }
 
-function showRoundResults() {
-  const ranked = computeRanking(tourneyItems);
-  lastRanking = buildJson(ranked);
+function refreshRankingDisplay() {
+  lastRanking = Core.buildJson(T, { jsonFields: JSON_FIELDS });
   lastJsonText = JSON.stringify(lastRanking, null, 2);
-
-  finalTiersEl.innerHTML = tierListHtml(ranked);
+  finalTiersEl.innerHTML = tierListHtml(Core.tiers(T));
   renderEliminatedSection();
+}
+
+function showRoundResults() {
+  refreshRankingDisplay();
   if (resultsHeading) {
-    resultsHeading.textContent = `Ranking after round ${currentRound}`;
+    resultsHeading.textContent = `Ranking after round ${T.round}`;
   }
 
-  const maxed = currentRound >= maxRounds;
+  const maxed = T.round >= maxRounds;
   if (anotherRoundBtn) anotherRoundBtn.classList.toggle("hidden", maxed);
   if (roundsNote) {
     if (maxed) {
       roundsNote.textContent = "Maximum rounds reached. This is as accurate as it gets.";
-    } else if (currentRound < recommendedRounds) {
-      const remaining = recommendedRounds - currentRound;
+    } else if (T.round < recommendedRounds) {
+      const remaining = recommendedRounds - T.round;
       roundsNote.textContent = `${remaining} more round${remaining !== 1 ? "s" : ""} recommended for accuracy.`;
     } else {
       roundsNote.textContent = "Enough for solid tiers. Add rounds to refine further.";
     }
   }
 
-  showEliminationPrompt(getEliminationCandidates());
+  showEliminationPrompt(Core.eliminationCandidates(T));
 
   matchupSection.classList.add("hidden");
   resultsSection.classList.remove("hidden");
@@ -478,49 +345,33 @@ function showRoundResults() {
 
 // --- Main tournament (one round at a time; user adds rounds for accuracy) ---
 async function runRound() {
-  currentRound++;
-  addRoundPill(currentRound);
-  logRoundDivider(currentRound);
-
-  const { pairs } = swissPair(tourneyItems);
-  roundMatchups = pairs.length;
-  roundMatchupsDone = 0;
-  updateProgress();
-
-  for (let m = 0; m < pairs.length; m++) {
-    const [a, b] = pairs[m];
-
-    const winner = await pickWinner(a, b);
-    const loser = winner === a ? b : a;
-
-    stats.get(winner.id).wins++;
-    stats.get(a.id).opponents.push(b.id);
-    stats.get(b.id).opponents.push(a.id);
-    roundMatchupsDone++;
-    updateProgress();
-    logComparison(comparisonsDone, winner, loser);
-  }
-
+  await Core.playRound(T, pickWinner, {
+    onRoundStart: (t, pairs) => {
+      addRoundPill(t.round);
+      logRoundDivider(t.round);
+      roundMatchups = pairs.length;
+      roundMatchupsDone = 0;
+      updateProgress();
+    },
+    onResult: (t, winner, loser) => {
+      roundMatchupsDone++;
+      updateProgress();
+      logComparison(t.comparisons, winner, loser);
+    },
+  });
   showRoundResults();
 }
 
 function startTournament() {
-  stats = new Map();
-  for (const a of ITEMS) {
-    stats.set(a.id, { wins: 0, opponents: [], hadBye: false, buchholz: 0 });
-  }
-  comparisonsDone = 0;
-  currentRound = 0;
-  eliminatedItems = [];
+  T = Core.createTournament(ITEMS);
   pendingEliminationCandidates = [];
   standingsEl.innerHTML = "";
   currentRoundHeader = null;
   progressBar.innerHTML = "";
-  const perRound = Math.floor(ITEMS.length / 2);
+  const perRound = Core.comparisonsPerRound(T);
   if (progressSub) {
     progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round`;
   }
-  tourneyItems = shuffle([...ITEMS]);
   if (elimSection) elimSection.classList.add("hidden");
   if (eliminatedTiersEl) {
     eliminatedTiersEl.classList.add("hidden");
@@ -611,12 +462,7 @@ if (eliminateBtn) {
     applyElimination(pendingEliminationCandidates);
     pendingEliminationCandidates = [];
     if (elimSection) elimSection.classList.add("hidden");
-    // Refresh the ranking display (fewer items) and eliminated section
-    const ranked = computeRanking(tourneyItems);
-    lastRanking = buildJson(ranked);
-    lastJsonText = JSON.stringify(lastRanking, null, 2);
-    finalTiersEl.innerHTML = tierListHtml(ranked);
-    renderEliminatedSection();
+    refreshRankingDisplay();
   });
 }
 
@@ -629,7 +475,7 @@ if (keepAllBtn) {
 
 if (anotherRoundBtn) {
   anotherRoundBtn.addEventListener("click", () => {
-    if (currentRound >= maxRounds) return;
+    if (T.round >= maxRounds) return;
     resultsSection.classList.add("hidden");
     matchupSection.classList.remove("hidden");
     runRound();

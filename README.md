@@ -55,11 +55,19 @@ Set a brand color with `accent` in the config; the engine derives the readable t
 
 - [`index.html`](index.html) — markup + script wiring
 - [`styles.css`](styles.css) — styling (scoped under `#bracket`)
-- [`bracket.js`](bracket.js) — the engine (media-agnostic; don't edit per-ranker)
+- [`bracket-core.js`](bracket-core.js) — the ranking engine: pairing, scoring, tiers, export (no DOM)
+- [`bracket.js`](bracket.js) — rendering and event wiring on top of the core (don't edit per-ranker)
 - [`config.js`](config.js) — labels + rendering config (edit me)
 - [`items.js`](items.js) — input data (edit me)
 - [`art-cache.js`](art-cache.js) — generated `id → image URL` map
 - [`fetch-art.js`](fetch-art.js) — album art fetcher example (`node fetch-art.js`)
+- [`tests/`](tests) — engine tests (`npm test`)
+
+## Tests
+
+`npm test` runs the engine tests with Node's built-in test runner. No dependencies to install, and nothing to build — the app itself never loads them.
+
+The core is DOM-free and takes two injected seams: `rng` (so a run is reproducible from a seed) and `decide` (so a script can play a tournament instead of a human clicking cards). Tests use those to play thousands of rounds and assert invariants — wins are conserved, every item is scheduled exactly once per round, opponents are symmetric — plus ranking-quality properties measured against a known ground truth.
 
 ## License
 
