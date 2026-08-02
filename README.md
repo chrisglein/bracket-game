@@ -66,7 +66,7 @@ Set a brand color with `accent` in the config; the engine derives the readable t
 
 ## Tests
 
-`npm test` runs the engine tests with Node's built-in test runner. No dependencies to install, and nothing to build — the app itself never loads them.
+`npm test` runs the engine tests with Node's built-in test runner (Node 20+). No dependencies to install, and nothing to build — the app itself never loads them. CI runs the same command on every pull request.
 
 The core is DOM-free and takes two injected seams: `rng` (so a run is reproducible from a seed) and `decide` (so a script can play a tournament instead of a human clicking cards). Tests use those to play thousands of rounds and assert invariants — wins are conserved, every item is scheduled exactly once per round, opponents are symmetric — plus ranking-quality properties measured against a known ground truth.
 
