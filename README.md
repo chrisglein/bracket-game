@@ -22,23 +22,23 @@ Instead of a full sort (`~n*log2(n)` comparisons), the app runs a **Swiss-system
 
 ## Make Your Own Ranker
 
-Copy this folder, then edit three files — the engine (`bracket.js`) never changes:
+Copy this folder, then edit three files — the engine (`bracket.js` and `bracket-core.js`) never changes:
 
 1. **`items.js`** — your data. Sets `window.ITEMS`, an array of `{ id, title, ... }`. Add whatever extra fields you need (`artist`, `year`, `players`, `imdb`, …).
 2. **`config.js`** — labels + how each item renders. Sets `window.BRACKET` (see contract below).
 3. **`art-cache.js`** — optional `window.ART` map of `id → image URL`. Generate it with `fetch-art.js`, or write it by hand.
 
-To rank a *different set of the same media type* (e.g. "my movies" vs. "her movies"), just swap `items.js` (and its `art-cache.js`) — `config.js` and `bracket.js` stay put.
+To rank a *different set of the same media type* (e.g. "my movies" vs. "her movies"), just swap `items.js` (and its `art-cache.js`) — `config.js` and the engine stay put.
 
 ### Example: ranking movies
 
-**`items.js`**
+**`items.js`** — `id` must be unique (it keys the art map and the export); everything past `id` and `title` is yours to invent.
 ```js
 window.ITEMS = [
-  { id: "parasite",       title: "Parasite",              director: "Bong Joon-ho",  year: 2019 },
-  { id: "everything-ewt", title: "Everything Everywhere", director: "Daniels",       year: 2022 },
-  { id: "the-lobster",    title: "The Lobster",           director: "Yorgos Lanthimos", year: 2015 },
-  { id: "hereditary",     title: "Hereditary",            director: "Ari Aster",     year: 2018 },
+  { id: "parasite",       title: "Parasite",              director: "Bong Joon-ho",     year: 2019, imdb: "tt6751668" },
+  { id: "everything-ewt", title: "Everything Everywhere", director: "Daniels",          year: 2022, imdb: "tt6710474" },
+  { id: "the-lobster",    title: "The Lobster",           director: "Yorgos Lanthimos", year: 2015, imdb: "tt3464902" },
+  { id: "hereditary",     title: "Hereditary",            director: "Ari Aster",        year: 2018, imdb: "tt7784604" },
   // … add as many as you like
 ];
 ```
@@ -49,18 +49,20 @@ window.BRACKET = {
   noun: "movie",
   nounPlural: "movies",
   prompt: "Which movie do you prefer?",
-  accent: "#e50914",          // brand color (hex); pick any color
+  intro: "Pick the movie you prefer in each matchup. Movies land in tiers by wins.",
+  accent: "#5b8def",          // brand color (hex); pick any color
   recommendedRounds: 4,
+  maxRounds: 8,
 
   // Extra lines shown under the title on each matchup card.
   cardLines: (item) => [
     { text: item.director, className: "sub" },
-    { text: String(item.year), className: "meta" },
+    { text: item.year, className: "meta" },
   ],
 
   // Optional: link to IMDb for each movie.
   link: (item) => item.imdb
-    ? { href: `https://www.imdb.com/title/${item.imdb}/`, label: "IMDb", site: "imdb" }
+    ? { href: `https://www.imdb.com/title/${item.imdb}/`, label: "IMDb", site: "IMDb" }
     : null,
 
   // Suffix after the title in the standings + final results lists.
@@ -71,7 +73,7 @@ window.BRACKET = {
 };
 ```
 
-**`art-cache.js`** (optional — omit or leave empty if you have no images)
+**`art-cache.js`** (optional — the app falls back to an empty map if the file is missing)
 ```js
 window.ART = {
   "parasite":       "https://example.com/posters/parasite.jpg",
@@ -79,6 +81,8 @@ window.ART = {
   // … one entry per item id
 };
 ```
+
+`fetch-art.js` generates this file from the iTunes album API, so it only fits albums — for other media, write the map by hand or swap the fetcher's lookup.
 
 ### Config contract (`window.BRACKET`)
 
@@ -88,6 +92,7 @@ All fields optional. Item-derived text is escaped by the engine, so functions re
 | --- | --- | --- |
 | `noun` / `nounPlural` | string | Labels, e.g. `"movie"` / `"movies"` |
 | `prompt` | string | Matchup heading, e.g. `"Which do you like more?"` |
+| `intro` | string | One-line explanation shown in the Setup box |
 | `accent` | string | Brand color (hex); text / contrast / tint variants auto-derived |
 | `recommendedRounds` / `maxRounds` | number | Suggested round count (drives the "recommended" note) and the hard cap |
 | `cardLines(item)` | fn → `[{ text, className }]` | Extra lines under the title on a card (`className`: `sub` or `meta`) |
