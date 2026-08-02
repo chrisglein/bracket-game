@@ -103,7 +103,6 @@ let currentPairIndex = 0;
 let roundHistory = [];
 
 const STORAGE_KEY = "bracket-state-v2";
-const ITEM_FINGERPRINT = ITEMS.map((item) => `${item.id}\u001e${item.title}`).join("\u001f");
 const ITEM_INDEX = new Map(ITEMS.map((item) => [String(item.id), item]));
 
 // --- Utilities ---
@@ -136,18 +135,16 @@ function clearSavedState() {
 function saveState(view) {
   if (!T) return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      itemFingerprint: ITEM_FINGERPRINT,
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(Core.snapshotSession(T, {
       view,
-      core: Core.snapshotTournament(T),
       roundMatchups,
       roundMatchupsDone,
       currentPairIndex,
-      currentPairs: currentPairs.map(([a, b]) => [a.id, b.id]),
+      currentPairs,
       roundHistory,
       eliminationPromptVisible: !!(elimSection && !elimSection.classList.contains("hidden")),
-      keptIds: [...keptIds],
-    }));
+      keptIds,
+    })));
   } catch {
     // Ignore storage failures and keep the app usable without persistence.
   }
@@ -156,15 +153,8 @@ function saveState(view) {
 function loadSavedState() {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const saved = JSON.parse(raw);
-    if (!saved || saved.itemFingerprint !== ITEM_FINGERPRINT) {
-      clearSavedState();
-      return null;
-    }
-    return saved;
+    return raw ? JSON.parse(raw) : null;
   } catch {
-    clearSavedState();
     return null;
   }
 }
@@ -471,65 +461,34 @@ function runRound() {
 }
 
 function restoreRoundHistory(history) {
-  roundHistory = Array.isArray(history) ? history : [];
   standingsEl.innerHTML = "";
   currentRoundHeader = null;
 
-  for (const entry of roundHistory) {
-    if (!entry || !Number.isInteger(entry.round)) continue;
+  for (const entry of history) {
     logRoundDivider(entry.round);
-    const comparisons = Array.isArray(entry.comparisons) ? entry.comparisons : [];
-    for (const comparison of comparisons) {
-      const winner = itemById(comparison.winnerId);
-      const loser = itemById(comparison.loserId);
-      if (winner && loser) {
-        logComparison(comparison.n, winner, loser);
-      }
+    for (const comparison of entry.comparisons) {
+      logComparison(comparison.n, itemById(comparison.winnerId), itemById(comparison.loserId));
     }
   }
 }
 
 function restoreTournament(saved) {
-  if (!saved || !saved.core) return false;
+  const session = Core.restoreSession(ITEMS, saved);
+  if (!session) return false;
 
-  const restored = Core.restoreTournament(ITEMS, saved.core);
-  const savedPairs = Array.isArray(saved.currentPairs) ? saved.currentPairs : [];
-  if (!restored) {
-    clearSavedState();
-    return false;
-  }
-
-  const pairs = [];
-  for (const pair of savedPairs) {
-    if (!Array.isArray(pair) || pair.length !== 2) {
-      clearSavedState();
-      return false;
-    }
-    const a = itemById(pair[0]);
-    const b = itemById(pair[1]);
-    if (!a || !b) {
-      clearSavedState();
-      return false;
-    }
-    pairs.push([a, b]);
-  }
-
-  T = restored;
+  T = session.tournament;
   // A trimmed pool supports fewer rounds, matching what applyElimination set.
   maxRounds = roundCapFor(T.active.length);
-  roundMatchups = pairs.length || Number(saved.roundMatchups) || 0;
-  roundMatchupsDone = Number(saved.roundMatchupsDone) || 0;
-  currentPairIndex = Number(saved.currentPairIndex) || 0;
-  currentPairs = pairs;
+  roundMatchups = session.roundMatchups;
+  roundMatchupsDone = session.roundMatchupsDone;
+  currentPairIndex = session.currentPairIndex;
+  currentPairs = session.currentPairs;
+  roundHistory = session.roundHistory;
   lastRanking = null;
   lastJsonText = "";
   pendingResolve = null;
   pendingEliminationCandidates = [];
   keptIds = new Set();
-  if (currentPairIndex < 0 || currentPairIndex > currentPairs.length) {
-    clearSavedState();
-    return false;
-  }
 
   const perRound = Core.comparisonsPerRound(T);
   if (progressSub) {
@@ -542,17 +501,17 @@ function restoreTournament(saved) {
 
   progressBar.innerHTML = "";
   for (let round = 1; round <= T.round; round++) addRoundPill(round);
-  restoreRoundHistory(saved.roundHistory);
+  restoreRoundHistory(roundHistory);
   updateProgress();
 
   setupSection.classList.add("hidden");
   progressSection.classList.remove("hidden");
   standingsSection.classList.remove("hidden");
 
-  if (saved.view === "results") {
+  if (session.view === "results") {
     renderResultsView({
-      eliminationPromptVisible: !!saved.eliminationPromptVisible,
-      keptIds: Array.isArray(saved.keptIds) ? saved.keptIds : [],
+      eliminationPromptVisible: session.eliminationPromptVisible,
+      keptIds: session.keptIds,
     });
   } else {
     if (elimSection) elimSection.classList.add("hidden");

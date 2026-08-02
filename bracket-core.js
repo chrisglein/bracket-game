@@ -146,6 +146,87 @@
     };
   }
 
+  // --- Session persistence ---
+  // A snapshot alone cannot resume a half-played round, so a session also
+  // carries the in-round cursor, the pairings on screen, and the log. The
+  // rules for what survives a reload live here, free of storage and DOM.
+
+  // Identifies the item list a session was played against. A different or
+  // edited list invalidates the session rather than silently mismatching.
+  function itemFingerprint(items) {
+    return items.map((item) => `${item.id}\u001e${item.title}`).join("\u001f");
+  }
+
+  function snapshotSession(t, session) {
+    const s = session || {};
+    return {
+      itemFingerprint: itemFingerprint(t.all),
+      view: s.view === "results" ? "results" : "matchup",
+      core: snapshotTournament(t),
+      roundMatchups: Number(s.roundMatchups) || 0,
+      roundMatchupsDone: Number(s.roundMatchupsDone) || 0,
+      currentPairIndex: Number(s.currentPairIndex) || 0,
+      currentPairs: (s.currentPairs || []).map(([a, b]) => [a.id, b.id]),
+      roundHistory: s.roundHistory || [],
+      eliminationPromptVisible: !!s.eliminationPromptVisible,
+      keptIds: [...(s.keptIds || [])],
+    };
+  }
+
+  function restoreSession(items, saved) {
+    if (!saved || typeof saved !== "object") return null;
+    if (saved.itemFingerprint !== itemFingerprint(items)) return null;
+
+    const tournament = restoreTournament(items, saved.core);
+    if (!tournament) return null;
+
+    const byKey = new Map(items.map((item) => [String(item.id), item]));
+    const savedPairs = Array.isArray(saved.currentPairs) ? saved.currentPairs : [];
+    const currentPairs = [];
+    for (const pair of savedPairs) {
+      if (!Array.isArray(pair) || pair.length !== 2) return null;
+      const a = byKey.get(String(pair[0]));
+      const b = byKey.get(String(pair[1]));
+      if (!a || !b || a.id === b.id) return null;
+      currentPairs.push([a, b]);
+    }
+
+    // The cursor is how far into currentPairs the player got; landing exactly
+    // at the end means the round finished and results are due.
+    const currentPairIndex = Number(saved.currentPairIndex) || 0;
+    if (!Number.isInteger(currentPairIndex) || currentPairIndex < 0) return null;
+    if (currentPairIndex > currentPairs.length) return null;
+
+    // A damaged log costs history, not the ranking, so bad entries drop.
+    const savedHistory = Array.isArray(saved.roundHistory) ? saved.roundHistory : [];
+    const roundHistory = [];
+    for (const entry of savedHistory) {
+      if (!entry || !Number.isInteger(entry.round)) continue;
+      const savedComparisons = Array.isArray(entry.comparisons) ? entry.comparisons : [];
+      const comparisons = [];
+      for (const c of savedComparisons) {
+        if (!c || !Number.isFinite(c.n)) continue;
+        const winner = byKey.get(String(c.winnerId));
+        const loser = byKey.get(String(c.loserId));
+        if (!winner || !loser || winner.id === loser.id) continue;
+        comparisons.push({ n: c.n, winnerId: winner.id, loserId: loser.id });
+      }
+      roundHistory.push({ round: entry.round, comparisons });
+    }
+
+    return {
+      tournament,
+      view: saved.view === "results" ? "results" : "matchup",
+      currentPairs,
+      currentPairIndex,
+      roundMatchups: currentPairs.length || Number(saved.roundMatchups) || 0,
+      roundMatchupsDone: Number(saved.roundMatchupsDone) || 0,
+      roundHistory,
+      eliminationPromptVisible: !!saved.eliminationPromptVisible,
+      keptIds: (Array.isArray(saved.keptIds) ? saved.keptIds : []).map(String),
+    };
+  }
+
   // --- Swiss pairing ---
   // Groups items by win count, shuffles within groups, pairs adjacent items,
   // avoids rematches when possible. Gives a bye to the lowest-ranked item if
@@ -360,6 +441,9 @@
     createTournament,
     snapshotTournament,
     restoreTournament,
+    itemFingerprint,
+    snapshotSession,
+    restoreSession,
     swissPair,
     startRound,
     recordResult,
