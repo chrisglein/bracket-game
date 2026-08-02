@@ -99,6 +99,7 @@ All fields optional. Item-derived text is escaped by the engine, so functions re
 | `link(item)` | fn → `{ href, label, site }` \| `null` | Optional external-link icon (e.g. BGG, IMDb) |
 | `listLine(item)` | fn → string | Suffix after the title in standings/results |
 | `jsonFields` | string[] | Extra keys included in the JSON export |
+| `storageKey` | string | Suffix for the saved-progress key; set it when several rankers share one origin |
 
 ### Theming
 

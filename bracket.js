@@ -29,6 +29,8 @@
 //   link(item)       -> { href, label, site } | null  external link pill
 //   listLine(item)   -> string  suffix after the title in standings/results
 //   jsonFields       -> [ "field", ... ]  extra keys included in JSON export
+//   storageKey    suffix for the saved-progress key; set it when several
+//                 rankers share one origin
 //
 // All item-derived text is escaped by the engine, so config functions return
 // plain strings/data, never HTML.
@@ -111,7 +113,8 @@ let currentPairs = [];
 let currentPairIndex = 0;
 let roundHistory = [];
 
-const STORAGE_KEY = "bracket-state-v2";
+// Suffixed so several rankers hosted on one origin keep separate saved progress.
+const STORAGE_KEY = "bracket-state-v2" + (CFG.storageKey ? ":" + CFG.storageKey : "");
 const ITEM_INDEX = new Map(ITEMS.map((item) => [String(item.id), item]));
 
 // --- Utilities ---
