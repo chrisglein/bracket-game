@@ -1,5 +1,9 @@
 // Bracket — a config-driven, pairwise ranking engine (Swiss-system tournament).
 //
+// This file is the UI layer: rendering, event wiring, and progress display.
+// The ranking itself — pairing, scoring, tiers, elimination, export — lives in
+// bracket-core.js, which is DOM-free and unit tested.
+//
 // This file is media-agnostic. It ranks any list of items by repeatedly asking
 // the user to pick a winner between two of them. It runs Swiss rounds where
 // items with similar records are paired against each other; after each round
@@ -42,6 +46,11 @@ const listLineFn = typeof CFG.listLine === "function" ? CFG.listLine : () => "";
 const JSON_FIELDS = Array.isArray(CFG.jsonFields) ? CFG.jsonFields : [];
 
 const ITEMS = Array.isArray(window.ITEMS) ? window.ITEMS : [];
+const ITEMS_BY_ID = new Map(ITEMS.map((item) => [String(item.id), item]));
+const TITLE_COUNTS = new Map();
+for (const item of ITEMS) {
+  TITLE_COUNTS.set(item.title, (TITLE_COUNTS.get(item.title) || 0) + 1);
+}
 const ART = window.ART || {};
 
 // --- DOM refs ---
@@ -73,16 +82,22 @@ const standingsEl = document.getElementById("standings");
 const resultsSection = document.getElementById("results-section");
 const resultsHeading = document.getElementById("results-heading");
 const finalTiersEl = document.getElementById("final-tiers");
+const eliminatedTiersEl = document.getElementById("eliminated-tiers");
 const roundsNote = document.getElementById("rounds-note");
 const anotherRoundBtn = document.getElementById("another-round");
 const copyBtn = document.getElementById("copy-json");
 const emailBtn = document.getElementById("email-results");
 const restartBtn = document.getElementById("restart");
 
+const elimSection = document.getElementById("elimination-section");
+const elimHintEl = document.getElementById("elim-hint");
+const elimListEl = document.getElementById("elimination-list");
+const eliminateBtn = document.getElementById("eliminate-btn");
+const keepAllBtn = document.getElementById("keep-all-btn");
+
 // --- State ---
-let stats = new Map(); // itemId -> { wins, opponents[], hadBye, buchholz }
-let comparisonsDone = 0;
-let currentRound = 0;
+const Core = window.BracketCore;
+let T = null; // current tournament state, owned by bracket-core.js
 let roundMatchups = 0;
 let roundMatchupsDone = 0;
 let pendingResolve = null;
@@ -91,17 +106,10 @@ let lastJsonText = "";
 let maxRounds = 0;
 let recommendedRounds = 0;
 let currentRoundHeader = null;
-let tourneyItems = [];
+let pendingEliminationCandidates = [];
+let keptIds = new Set(); // candidates the user opted to rescue from a trim
 
 // --- Utilities ---
-function shuffle(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-
 function esc(str) {
   const d = document.createElement("div");
   d.textContent = str == null ? "" : String(str);
@@ -121,6 +129,11 @@ function itemSummary(item) {
   return suffix ? `${item.title} — ${suffix}` : item.title;
 }
 
+function rankingSummary(entry) {
+  const item = ITEMS_BY_ID.get(String(entry.id)) || entry;
+  return (TITLE_COUNTS.get(item.title) || 0) > 1 ? itemSummary(item) : item.title;
+}
+
 function setResumeError(message) {
   if (!resumeError) return;
   if (message) {
@@ -137,9 +150,11 @@ function resetTournamentUi() {
   currentRoundHeader = null;
   progressBar.innerHTML = "";
   pendingResolve = null;
+  roundMatchups = 0;
+  roundMatchupsDone = 0;
 }
 
-function renderCompletedProgress(roundsCompleted) {
+function renderCompletedProgress(roundsCompleted, comparisonCount, exactComparisonCount) {
   progressBar.innerHTML = "";
   for (let round = 1; round <= roundsCompleted; round++) {
     addRoundPill(round);
@@ -151,221 +166,9 @@ function renderCompletedProgress(roundsCompleted) {
     seg.classList.add("completed");
     seg.classList.remove("active");
   });
-  progressText.textContent = `Round ${roundsCompleted} · ${comparisonsDone} comparison${comparisonsDone !== 1 ? "s" : ""}`;
-}
-
-function validateImportedEntries(entries) {
-  if (!entries.length) {
-    throw new Error("No ranking entries were found in the pasted export.");
-  }
-  if (entries.length !== ITEMS.length) {
-    throw new Error(`Expected ${ITEMS.length} ${NOUN_PLURAL} in the export, found ${entries.length}.`);
-  }
-
-  const seen = new Set();
-  const winsById = new Map();
-  let inferredRounds = 0;
-  let lastWins = Infinity;
-
-  for (const entry of entries) {
-    if (!entry || !entry.item) {
-      throw new Error("The pasted export does not match the loaded items.");
-    }
-    if (seen.has(entry.item.id)) {
-      throw new Error(`Duplicate ${NOUN} found in the pasted export: ${entry.item.title}.`);
-    }
-    if (!Number.isInteger(entry.wins) || entry.wins < 0) {
-      throw new Error("Each imported entry must include a whole-number win count.");
-    }
-    if (entry.wins > lastWins) {
-      throw new Error("Imported rankings must stay sorted from most wins to fewest wins.");
-    }
-    seen.add(entry.item.id);
-    winsById.set(entry.item.id, entry.wins);
-    inferredRounds = Math.max(inferredRounds, entry.wins);
-    lastWins = entry.wins;
-  }
-
-  if (inferredRounds < 1) {
-    throw new Error("The pasted export does not include any completed rounds to resume from.");
-  }
-  if (inferredRounds > maxRounds) {
-    throw new Error(`This export shows ${inferredRounds} rounds, but the loaded setup only supports ${maxRounds}.`);
-  }
-
-  return { inferredRounds, winsById };
-}
-
-function parseJsonImport(text) {
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed)) {
-    throw new Error("JSON exports must be an array of ranked entries.");
-  }
-
-  const itemsById = new Map(ITEMS.map((item) => [String(item.id), item]));
-  return {
-    entries: parsed.map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        throw new Error("JSON exports must contain objects for each ranked item.");
-      }
-      const item = itemsById.get(String(entry.id));
-      if (!item) {
-        throw new Error("The pasted JSON does not match the loaded items.");
-      }
-      return { item, wins: entry.wins };
-    }),
-  };
-}
-
-function parseEmailImport(text) {
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (!lines.length || !lines.some((line) => /^##\s+\d+\s+win/i.test(line))) {
-    return null;
-  }
-
-  const itemsBySummary = new Map();
-  const uniqueTitles = new Map();
-  for (const item of ITEMS) {
-    itemsBySummary.set(itemSummary(item), item);
-    uniqueTitles.set(item.title, (uniqueTitles.get(item.title) || 0) + 1);
-  }
-
-  const entries = [];
-  let currentWins = null;
-  for (const line of lines) {
-    const header = line.match(/^##\s+(\d+)\s+wins?$/i);
-    if (header) {
-      currentWins = Number(header[1]);
-      continue;
-    }
-    if (/^\(truncated,/i.test(line)) {
-      throw new Error("Truncated email exports cannot be resumed. Use Copy JSON for the full ranking.");
-    }
-    if (currentWins == null) {
-      throw new Error("Each email section must start with a '## N Wins' heading.");
-    }
-    const item =
-      itemsBySummary.get(line) ||
-      (uniqueTitles.get(line) === 1 ? ITEMS.find((candidate) => candidate.title === line) : null);
-    if (!item) {
-      throw new Error(`Could not match this imported line to a loaded ${NOUN}: ${line}`);
-    }
-    entries.push({ item, wins: currentWins });
-  }
-
-  return { entries };
-}
-
-function parseImportedText(text) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    throw new Error("Paste exported JSON or email text to resume.");
-  }
-
-  const parsedJson = parseJsonImport(trimmed);
-  if (parsedJson) return parsedJson;
-
-  const parsedEmail = parseEmailImport(trimmed);
-  if (parsedEmail) return parsedEmail;
-
-  throw new Error("Paste exported JSON or the email body generated by this app.");
-}
-
-function resumeTournamentFromText(text) {
-  const parsed = parseImportedText(text);
-  const { inferredRounds, winsById } = validateImportedEntries(parsed.entries);
-
-  stats = new Map();
-  for (const item of ITEMS) {
-    stats.set(item.id, {
-      wins: winsById.get(item.id) || 0,
-      opponents: [],
-      hadBye: false,
-      buchholz: 0,
-    });
-  }
-
-  comparisonsDone = inferredRounds * Math.floor(ITEMS.length / 2);
-  currentRound = inferredRounds;
-  roundMatchups = 0;
-  roundMatchupsDone = 0;
-  tourneyItems = parsed.entries.map((entry) => entry.item);
-
-  const perRound = Math.floor(ITEMS.length / 2);
-  if (progressSub) {
-    progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round`;
-  }
-
-  resetTournamentUi();
-  renderCompletedProgress(currentRound);
-
-  setupSection.classList.add("hidden");
-  progressSection.classList.remove("hidden");
-  standingsSection.classList.add("hidden");
-
-  showRoundResults();
-}
-
-// --- Swiss pairing ---
-// Groups items by win count, shuffles within groups, pairs adjacent items,
-// avoids rematches when possible. Gives a bye to the lowest-ranked item
-// if the count is odd.
-function swissPair(items) {
-  const groups = new Map();
-  for (const a of items) {
-    const w = stats.get(a.id).wins;
-    if (!groups.has(w)) groups.set(w, []);
-    groups.get(w).push(a);
-  }
-  const sorted = [];
-  for (const k of [...groups.keys()].sort((a, b) => b - a)) {
-    sorted.push(...shuffle([...groups.get(k)]));
-  }
-
-  // Handle odd count: bye goes to the lowest item that hasn't had one yet.
-  let byeItem = null;
-  if (sorted.length % 2 !== 0) {
-    for (let i = sorted.length - 1; i >= 0; i--) {
-      if (!stats.get(sorted[i].id).hadBye) {
-        byeItem = sorted.splice(i, 1)[0];
-        break;
-      }
-    }
-    if (!byeItem) {
-      byeItem = sorted.pop();
-    }
-    stats.get(byeItem.id).wins++;
-    stats.get(byeItem.id).hadBye = true;
-  }
-
-  // Pair adjacent items, preferring no rematch.
-  const pairs = [];
-  const used = new Set();
-
-  for (let i = 0; i < sorted.length; i++) {
-    if (used.has(sorted[i].id)) continue;
-    const faced = new Set(stats.get(sorted[i].id).opponents);
-    let bestJ = -1;
-
-    for (let j = i + 1; j < sorted.length; j++) {
-      if (used.has(sorted[j].id)) continue;
-      if (!faced.has(sorted[j].id)) { bestJ = j; break; }
-      if (bestJ === -1) bestJ = j; // fallback: allow rematch
-    }
-
-    if (bestJ !== -1) {
-      pairs.push([sorted[i], sorted[bestJ]]);
-      used.add(sorted[i].id);
-      used.add(sorted[bestJ].id);
-    }
-  }
-
-  return { pairs, byeItem };
+  progressText.textContent = exactComparisonCount
+    ? `Round ${roundsCompleted} · ${comparisonCount} comparison${comparisonCount !== 1 ? "s" : ""}`
+    : `Round ${roundsCompleted} · imported ranking`;
 }
 
 // --- UI: matchup ---
@@ -420,8 +223,6 @@ function choose(item) {
   if (!pendingResolve) return;
   const r = pendingResolve;
   pendingResolve = null;
-  comparisonsDone++;
-  updateProgress();
   r(item);
 }
 
@@ -450,11 +251,11 @@ function updateProgress() {
   segments.forEach((seg) => {
     const r = parseInt(seg.dataset.round, 10);
     const fill = seg.querySelector(".segment-fill");
-    if (r < currentRound) {
+    if (r < T.round) {
       fill.style.width = "100%";
       seg.classList.add("completed");
       seg.classList.remove("active");
-    } else if (r === currentRound) {
+    } else if (r === T.round) {
       const pct = roundMatchups > 0 ? Math.round((roundMatchupsDone / roundMatchups) * 100) : 0;
       fill.style.width = pct + "%";
       seg.classList.add("active");
@@ -464,7 +265,8 @@ function updateProgress() {
       seg.classList.remove("active", "completed");
     }
   });
-  progressText.textContent = `Round ${currentRound} \u00B7 ${comparisonsDone} comparison${comparisonsDone !== 1 ? "s" : ""}`;
+  const n = T.comparisons;
+  progressText.textContent = `Round ${T.round} \u00B7 ${n} comparison${n !== 1 ? "s" : ""}`;
 }
 
 // --- UI: comparison log (newest at the top, dividers between rounds) ---
@@ -494,94 +296,131 @@ function logComparison(n, winner, loser) {
 }
 
 // --- UI: final tier list ---
-function tierListHtml(items) {
-  const groups = new Map();
-  for (const a of items) {
-    const w = stats.get(a.id).wins;
-    if (!groups.has(w)) groups.set(w, []);
-    groups.get(w).push(a);
-  }
-
-  const sortedKeys = [...groups.keys()].sort((a, b) => b - a);
+function tierListHtml(groups) {
   let html = "";
-  let rank = 1;
-  let tierNum = 1;
-
-  for (const w of sortedKeys) {
-    const tier = groups.get(w);
-    html += `<div class="tier-group"><h3>Tier ${tierNum} \u00B7 ${w} win${w !== 1 ? "s" : ""}</h3><ol start="${rank}">`;
-    for (const a of tier) {
+  for (const group of groups) {
+    html += `<div class="tier-group"><h3>Tier ${group.tier} \u00B7 ${group.wins} win${group.wins !== 1 ? "s" : ""}</h3><ol start="${group.startRank}">`;
+    for (const a of group.items) {
       const thumb = artImg(a, "list-art");
       const sub = listLineFn(a) || "";
       html += `<li>${thumb}<span class="tier-title">${esc(a.title)}</span>${sub ? `<span class="list-sub">${esc(sub)}</span>` : ""}</li>`;
     }
     html += "</ol></div>";
-    rank += tier.length;
-    tierNum++;
   }
   return html;
 }
 
-// --- Ranking + results ---
-function computeRanking(items) {
-  for (const a of items) {
-    const s = stats.get(a.id);
-    s.buchholz = s.opponents.reduce((sum, oppId) => sum + stats.get(oppId).wins, 0);
-  }
-  return [...items].sort((a, b) => {
-    const sa = stats.get(a.id);
-    const sb = stats.get(b.id);
-    if (sb.wins !== sa.wins) return sb.wins - sa.wins;
-    return sb.buchholz - sa.buchholz;
-  });
+// --- Elimination ---
+
+function selectedForElimination() {
+  return pendingEliminationCandidates.filter((item) => !keptIds.has(item.id));
 }
 
-function buildJson(ranked) {
-  const groups = new Map();
-  for (const a of ranked) {
-    const w = stats.get(a.id).wins;
-    if (!groups.has(w)) groups.set(w, []);
-    groups.get(w).push(a);
+function updateEliminateButton() {
+  const total = pendingEliminationCandidates.length;
+  const n = selectedForElimination().length;
+  const label = eliminateBtn.querySelector(".btn-label");
+  if (label) label.textContent = n === total ? `Eliminate ${total}` : `Eliminate ${n} of ${total}`;
+  eliminateBtn.disabled = n === 0;
+}
+
+function showEliminationPrompt(candidates) {
+  if (!elimSection) return;
+  if (candidates.length === 0) {
+    elimSection.classList.add("hidden");
+    pendingEliminationCandidates = [];
+    keptIds.clear();
+    return;
   }
-  const sortedKeys = [...groups.keys()].sort((a, b) => b - a);
-  let rank = 1;
-  let tierNum = 1;
-  const json = [];
-  for (const w of sortedKeys) {
-    for (const a of groups.get(w)) {
-      const entry = { rank: rank++, tier: tierNum, id: a.id, title: a.title, wins: w };
-      for (const f of JSON_FIELDS) {
-        if (a[f] !== undefined) entry[f] = a[f];
-      }
-      json.push(entry);
-    }
-    tierNum++;
+  pendingEliminationCandidates = candidates;
+  keptIds.clear();
+  const n = candidates.length;
+  elimHintEl.textContent =
+    `After ${T.round} rounds, ${n} ${n === 1 ? "item" : "items"} still ${n === 1 ? "has" : "have"} ` +
+    `0 wins and cannot reach the top tiers. Eliminating them reduces future comparisons; ` +
+    `they will still appear at the bottom of the final ranking. ` +
+    `Uncheck any you want to keep in play.`;
+  elimListEl.innerHTML = candidates
+    .map((item) => {
+      const sub = listLineFn(item);
+      return `<li><label><input type="checkbox" checked data-id="${escAttr(item.id)}">` +
+        `<span class="elim-name">${esc(item.title)}</span>` +
+        `${sub ? `<span class="elim-sub">${esc(sub)}</span>` : ""}</label></li>`;
+    })
+    .join("");
+  updateEliminateButton();
+  elimSection.classList.remove("hidden");
+}
+
+function renderEliminatedSection() {
+  if (!eliminatedTiersEl) return;
+  if (T.eliminated.length === 0) {
+    eliminatedTiersEl.classList.add("hidden");
+    eliminatedTiersEl.innerHTML = "";
+    return;
   }
-  return json;
+  let html = `<div class="tier-group elim-tier-group"><h3>Eliminated (${T.eliminated.length})</h3><ol>`;
+  for (const a of T.eliminated) {
+    const w = T.stats.get(a.id).wins;
+    const thumb = artImg(a, "list-art");
+    const sub = listLineFn(a) || "";
+    html += `<li class="elim-item">${thumb}<span class="tier-title">${esc(a.title)}</span>${sub ? `<span class="list-sub">${esc(sub)}</span>` : ""}<span class="elim-badge">${w} win${w !== 1 ? "s" : ""}</span></li>`;
+  }
+  html += "</ol></div>";
+  eliminatedTiersEl.innerHTML = html;
+  eliminatedTiersEl.classList.remove("hidden");
+}
+
+function roundCapFor(itemCount) {
+  const hardMax = Math.max(1, itemCount - 1);
+  return Math.max(1, Math.min(MAX_ROUNDS_CFG || hardMax, hardMax));
+}
+
+function updateProgressSubtext() {
+  if (!T || !progressSub) return;
+  const perRound = Core.comparisonsPerRound(T);
+  const n = T.active.length;
+  let text = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round`;
+  if (T.eliminated.length) {
+    text += ` · ${n} item${n !== 1 ? "s" : ""} remaining`;
+  }
+  progressSub.textContent = text;
+}
+
+function applyElimination(candidates) {
+  Core.eliminate(T, candidates);
+  // A smaller pool supports fewer distinct opponents, so the cap moves too.
+  maxRounds = roundCapFor(T.active.length);
+  updateProgressSubtext();
+}
+
+function refreshRankingDisplay() {
+  lastRanking = Core.buildJson(T, { jsonFields: JSON_FIELDS });
+  lastJsonText = JSON.stringify(lastRanking, null, 2);
+  finalTiersEl.innerHTML = tierListHtml(Core.tiers(T));
+  renderEliminatedSection();
 }
 
 function showRoundResults() {
-  const ranked = computeRanking(tourneyItems);
-  lastRanking = buildJson(ranked);
-  lastJsonText = JSON.stringify(lastRanking, null, 2);
-
-  finalTiersEl.innerHTML = tierListHtml(ranked);
+  refreshRankingDisplay();
   if (resultsHeading) {
-    resultsHeading.textContent = `Ranking after round ${currentRound}`;
+    resultsHeading.textContent = `Ranking after round ${T.round}`;
   }
 
-  const maxed = currentRound >= maxRounds;
+  const maxed = T.round >= maxRounds;
   if (anotherRoundBtn) anotherRoundBtn.classList.toggle("hidden", maxed);
   if (roundsNote) {
     if (maxed) {
       roundsNote.textContent = "Maximum rounds reached. This is as accurate as it gets.";
-    } else if (currentRound < recommendedRounds) {
-      const remaining = recommendedRounds - currentRound;
+    } else if (T.round < recommendedRounds) {
+      const remaining = recommendedRounds - T.round;
       roundsNote.textContent = `${remaining} more round${remaining !== 1 ? "s" : ""} recommended for accuracy.`;
     } else {
       roundsNote.textContent = "Enough for solid tiers. Add rounds to refine further.";
     }
   }
+
+  showEliminationPrompt(Core.eliminationCandidates(T));
 
   matchupSection.classList.add("hidden");
   resultsSection.classList.remove("hidden");
@@ -589,45 +428,35 @@ function showRoundResults() {
 
 // --- Main tournament (one round at a time; user adds rounds for accuracy) ---
 async function runRound() {
-  currentRound++;
-  addRoundPill(currentRound);
-  logRoundDivider(currentRound);
-
-  const { pairs } = swissPair(tourneyItems);
-  roundMatchups = pairs.length;
-  roundMatchupsDone = 0;
-  updateProgress();
-
-  for (let m = 0; m < pairs.length; m++) {
-    const [a, b] = pairs[m];
-
-    const winner = await pickWinner(a, b);
-    const loser = winner === a ? b : a;
-
-    stats.get(winner.id).wins++;
-    stats.get(a.id).opponents.push(b.id);
-    stats.get(b.id).opponents.push(a.id);
-    roundMatchupsDone++;
-    updateProgress();
-    logComparison(comparisonsDone, winner, loser);
-  }
-
+  await Core.playRound(T, pickWinner, {
+    onRoundStart: (t, pairs) => {
+      addRoundPill(t.round);
+      logRoundDivider(t.round);
+      roundMatchups = pairs.length;
+      roundMatchupsDone = 0;
+      updateProgress();
+    },
+    onResult: (t, winner, loser) => {
+      roundMatchupsDone++;
+      updateProgress();
+      logComparison(t.comparisons, winner, loser);
+    },
+  });
   showRoundResults();
 }
 
 function startTournament() {
-  stats = new Map();
-  for (const a of ITEMS) {
-    stats.set(a.id, { wins: 0, opponents: [], hadBye: false, buchholz: 0 });
-  }
-  comparisonsDone = 0;
-  currentRound = 0;
+  T = Core.createTournament(ITEMS);
+  maxRounds = roundCapFor(ITEMS.length);
+  pendingEliminationCandidates = [];
+  keptIds.clear();
   resetTournamentUi();
-  const perRound = Math.floor(ITEMS.length / 2);
-  if (progressSub) {
-    progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round`;
+  updateProgressSubtext();
+  if (elimSection) elimSection.classList.add("hidden");
+  if (eliminatedTiersEl) {
+    eliminatedTiersEl.classList.add("hidden");
+    eliminatedTiersEl.innerHTML = "";
   }
-  tourneyItems = shuffle([...ITEMS]);
 
   setupSection.classList.add("hidden");
   progressSection.classList.remove("hidden");
@@ -636,6 +465,36 @@ function startTournament() {
   resultsSection.classList.add("hidden");
 
   runRound();
+}
+
+function resumeTournamentFromText(text) {
+  const restored = Core.importRanking(text, ITEMS, {
+    noun: NOUN,
+    nounPlural: NOUN_PLURAL,
+    listLine: listLineFn,
+    maxRounds: roundCapFor(ITEMS.length),
+  });
+
+  T = restored.tournament;
+  maxRounds = roundCapFor(T.active.length);
+  pendingEliminationCandidates = [];
+  keptIds.clear();
+  resetTournamentUi();
+  updateProgressSubtext();
+  if (elimSection) elimSection.classList.add("hidden");
+  if (eliminatedTiersEl) {
+    eliminatedTiersEl.classList.add("hidden");
+    eliminatedTiersEl.innerHTML = "";
+  }
+  renderCompletedProgress(T.round, T.comparisons, restored.exactComparisonCount);
+
+  setupSection.classList.add("hidden");
+  progressSection.classList.remove("hidden");
+  standingsSection.classList.add("hidden");
+  matchupSection.classList.add("hidden");
+  resultsSection.classList.add("hidden");
+
+  showRoundResults();
 }
 
 // --- Actions ---
@@ -661,42 +520,13 @@ copyBtn.addEventListener("click", async () => {
   }
 });
 
-// Build a compact, tier-grouped ranking for the email body, capped to a length
-// that most mail clients accept in a mailto: URL (~2000 chars encoded).
-function buildEmailContent() {
-  const subject = `My ${NOUN} ranking`;
-  const lines = [];
-  let lastTier = null;
-  for (const e of lastRanking) {
-    if (e.tier !== lastTier) {
-      if (lines.length) lines.push("");
-      lines.push(`## ${e.wins} Win${e.wins !== 1 ? "s" : ""}`);
-      lastTier = e.tier;
-    }
-    const item = ITEMS.find((candidate) => candidate.id === e.id);
-    lines.push(item ? itemSummary(item) : e.title);
-  }
-  let body = lines.join("\n");
-  // Cap the whole mailto for broad client support. Modern clients handle far
-  // more; this just keeps a clean truncation instead of a silent mid-item cut.
-  const MAX = 4000;
-  const overhead = subject.length + 30;
-  if (encodeURIComponent(body).length + overhead > MAX) {
-    const note = "\n(truncated, use Copy JSON for the full ranking)";
-    while (body.length && encodeURIComponent(body + note).length + overhead > MAX) {
-      const cut = body.lastIndexOf("\n");
-      if (cut < 0) break;
-      body = body.slice(0, cut);
-    }
-    body += note;
-  }
-  return { subject, body };
-}
-
 if (emailBtn) {
   emailBtn.addEventListener("click", () => {
     if (!lastRanking || !lastRanking.length) return;
-    const { subject, body } = buildEmailContent();
+    const { subject, body } = Core.buildEmailContent(lastRanking, {
+      noun: NOUN,
+      entryLine: rankingSummary,
+    });
     window.location.href =
       `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   });
@@ -708,12 +538,42 @@ restartBtn.addEventListener("click", () => {
   }
 });
 
+if (elimListEl) {
+  elimListEl.addEventListener("change", (e) => {
+    const box = e.target;
+    if (!box || box.type !== "checkbox") return;
+    if (box.checked) keptIds.delete(box.dataset.id);
+    else keptIds.add(box.dataset.id);
+    box.closest("li").classList.toggle("keeping", !box.checked);
+    updateEliminateButton();
+  });
+}
+
+if (eliminateBtn) {
+  eliminateBtn.addEventListener("click", () => {
+    const selected = selectedForElimination();
+    if (!selected.length) return;
+    applyElimination(selected);
+    pendingEliminationCandidates = [];
+    keptIds.clear();
+    if (elimSection) elimSection.classList.add("hidden");
+    refreshRankingDisplay();
+  });
+}
+
+if (keepAllBtn) {
+  keepAllBtn.addEventListener("click", () => {
+    pendingEliminationCandidates = [];
+    keptIds.clear();
+    if (elimSection) elimSection.classList.add("hidden");
+  });
+}
+
 if (anotherRoundBtn) {
   anotherRoundBtn.addEventListener("click", () => {
-    if (currentRound >= maxRounds) return;
+    if (T.round >= maxRounds) return;
     resultsSection.classList.add("hidden");
     matchupSection.classList.remove("hidden");
-    standingsSection.classList.remove("hidden");
     runRound();
   });
 }
@@ -791,18 +651,19 @@ function init() {
     itemCountEl.textContent = "0";
     comparisonEstimate.textContent = `No ${NOUN_PLURAL} loaded. Edit the data file.`;
     startBtn.disabled = true;
+    if (resumeBtn) resumeBtn.disabled = true;
     return;
   }
   if (ITEMS.length === 1) {
     itemCountEl.textContent = "1";
     comparisonEstimate.textContent = `Only one ${NOUN}, nothing to compare.`;
     startBtn.disabled = true;
+    if (resumeBtn) resumeBtn.disabled = true;
     return;
   }
 
   itemCountEl.textContent = ITEMS.length;
-  const hardMax = ITEMS.length - 1;
-  maxRounds = Math.max(1, Math.min(MAX_ROUNDS_CFG || hardMax, hardMax));
+  maxRounds = roundCapFor(ITEMS.length);
   const recDefault = Math.max(2, Math.ceil(Math.log2(ITEMS.length)));
   recommendedRounds = Math.min(RECOMMENDED_ROUNDS_CFG || recDefault, maxRounds);
   const perRound = Math.floor(ITEMS.length / 2);
