@@ -7,6 +7,8 @@ const {
   Core,
   makeRng,
   randomDecider,
+  noisyDecider,
+  indexRanker,
   playRounds,
   playChecked,
 } = require("./helpers.js");
@@ -19,16 +21,47 @@ function albumListLine(item) {
   return `${item.artist}${item.year ? ` (${item.year})` : ""}`;
 }
 
+const albumOptions = {
+  noun: "album",
+  nounPlural: "albums",
+  listLine: albumListLine,
+  maxRounds: 8,
+};
+
+// Mirrors what bracket.js sends to the email export: bare titles, qualified
+// only where a title is ambiguous. Duplicating the rule here is the point —
+// if the UI stops matching it, the round trip breaks.
 function albumEntryLine(entry) {
-  const suffix = albumListLine(entry);
-  return entry.title === "Continuum" ? `${entry.title} — ${suffix}` : entry.title;
+  const titleCounts = new Map();
+  for (const album of albums) titleCounts.set(album.title, (titleCounts.get(album.title) || 0) + 1);
+  return titleCounts.get(entry.title) > 1 ? `${entry.title} — ${albumListLine(entry)}` : entry.title;
+}
+
+function albumEmail(ranking) {
+  return Core.buildEmailContent(ranking, { noun: "album", entryLine: albumEntryLine }).body;
+}
+
+// The state a player actually exports from: the real 71-album list, several
+// rounds deep, with byes, winless albums the player chose to keep, and a
+// trimmed pool. Synthetic even-sized sweeps miss all four.
+async function midSession(seed, rounds) {
+  const t = Core.createTournament(albums, { rng: makeRng(seed) });
+  await playRounds(t, rounds, noisyDecider(indexRanker(albums), 0.8, makeRng(seed + 1)));
+  Core.eliminate(t, Core.eliminationCandidates(t).slice(1));
+  return t;
+}
+
+function assertRepresentative(t) {
+  assert.ok(t.byesAwarded > 0, "fixture stopped exercising byes");
+  assert.ok(t.eliminated.length > 0, "fixture stopped exercising a trimmed pool");
+  assert.ok(
+    t.active.some((item) => t.stats.get(item.id).wins === 0),
+    "fixture stopped exercising winless survivors"
+  );
 }
 
 test("email export uses item summaries so duplicate titles stay resumable", () => {
-  const { body } = Core.buildEmailContent(albumExport, {
-    noun: "album",
-    entryLine: albumEntryLine,
-  });
+  const body = albumEmail(albumExport);
 
   assert.ok(body.includes("Continuum — John Mayer (2006)"));
   assert.ok(body.includes("Continuum — Tanerelle"));
@@ -52,17 +85,7 @@ test("json import restores the active and eliminated pools", async () => {
 });
 
 test("email import restores a real exported ranking with duplicate titles", () => {
-  const { body } = Core.buildEmailContent(albumExport, {
-    noun: "album",
-    entryLine: albumEntryLine,
-  });
-
-  const restored = Core.importRanking(body, albums, {
-    noun: "album",
-    nounPlural: "albums",
-    listLine: albumListLine,
-    maxRounds: 8,
-  });
+  const restored = Core.importRanking(albumEmail(albumExport), albums, albumOptions);
 
   const ranking = Core.buildJson(restored.tournament, { jsonFields: albumJsonFields });
   assert.deepStrictEqual(ranking, albumExport);
@@ -77,6 +100,109 @@ test("truncated email exports are rejected", () => {
     }),
     /Truncated email exports cannot be resumed/
   );
+});
+
+// --- Mid-session resume ---
+// Everything above imports a tidy synthetic state. These run the shape a real
+// player pastes in: partway through the real list, mid-trim, both formats.
+
+test("a mid-session export round-trips through JSON and email alike", async () => {
+  const t = await midSession(11, 4);
+  assertRepresentative(t);
+  const ranking = Core.buildJson(t, { jsonFields: albumJsonFields });
+
+  for (const [format, text] of [["json", JSON.stringify(ranking)], ["email", albumEmail(ranking)]]) {
+    const restored = Core.importRanking(text, albums, albumOptions);
+    assert.deepStrictEqual(
+      Core.buildJson(restored.tournament, { jsonFields: albumJsonFields }),
+      ranking,
+      `${format} import changed the ranking`
+    );
+    assert.deepStrictEqual(
+      restored.tournament.eliminated.map((item) => item.id),
+      t.eliminated.map((item) => item.id),
+      `${format} import lost the trimmed pool`
+    );
+  }
+});
+
+test("a resumed mid-session run plays on and exports something resumable again", async () => {
+  const t = await midSession(12, 3);
+  assertRepresentative(t);
+  const first = Core.buildJson(t, { jsonFields: albumJsonFields });
+
+  const resumed = Core.importRanking(JSON.stringify(first), albums, albumOptions).tournament;
+  resumed.rng = makeRng(212);
+  await playRounds(resumed, 2, noisyDecider(indexRanker(albums), 0.8, makeRng(213)));
+  assert.strictEqual(resumed.round, t.round + 2);
+
+  let totalWins = 0;
+  for (const s of resumed.stats.values()) totalWins += s.wins;
+  assert.strictEqual(totalWins, resumed.comparisons + resumed.byesAwarded);
+
+  const second = Core.buildJson(resumed, { jsonFields: albumJsonFields });
+  const twice = Core.importRanking(albumEmail(second), albums, albumOptions);
+  assert.deepStrictEqual(
+    Core.buildJson(twice.tournament, { jsonFields: albumJsonFields }),
+    second,
+    "a resumed session's own export is not resumable"
+  );
+});
+
+test("a resumed run can still trim the winless albums it inherited", async () => {
+  const t = await midSession(13, 3);
+  const resumed = Core.importRanking(
+    JSON.stringify(Core.buildJson(t, { jsonFields: albumJsonFields })),
+    albums,
+    albumOptions
+  ).tournament;
+
+  const candidates = Core.eliminationCandidates(resumed);
+  assert.ok(candidates.length > 0, "resume did not carry enough rounds to offer a trim");
+  const remaining = resumed.active.length - candidates.length;
+  Core.eliminate(resumed, candidates);
+  assert.strictEqual(resumed.active.length, remaining);
+  assert.strictEqual(Core.comparisonsPerRound(resumed), Math.floor(remaining / 2));
+
+  resumed.rng = makeRng(214);
+  await playRounds(resumed, 1, noisyDecider(indexRanker(albums), 0.8, makeRng(215)));
+  assert.strictEqual(resumed.active.length, remaining);
+});
+
+test("an export at the round cap resumes, one past it is refused", async () => {
+  const t = Core.createTournament(albums, { rng: makeRng(14) });
+  await playRounds(t, 4, noisyDecider(indexRanker(albums), 0.8, makeRng(15)));
+  const text = JSON.stringify(Core.buildJson(t, { jsonFields: albumJsonFields }));
+
+  const atCap = Core.importRanking(text, albums, { ...albumOptions, maxRounds: 4 });
+  assert.strictEqual(atCap.tournament.round, 4);
+  assert.throws(
+    () => Core.importRanking(text, albums, { ...albumOptions, maxRounds: 3 }),
+    /shows 4 rounds, but the loaded setup only supports 3/
+  );
+});
+
+// Ids are matched as strings but handed back in their original type, so a
+// numeric-id ranker must still find its own stats after an import.
+test("numeric ids survive an import", async () => {
+  const numeric = [
+    { id: 1, title: "One" },
+    { id: 2, title: "Two" },
+    { id: 3, title: "Three" },
+    { id: 4, title: "Four" },
+    { id: 5, title: "Five" },
+  ];
+  const t = Core.createTournament(numeric, { rng: makeRng(105) });
+  await playChecked(t, 2, randomDecider(makeRng(106)), "numeric ids");
+  const ranking = Core.buildJson(t);
+
+  const restored = Core.importRanking(JSON.stringify(ranking), numeric, {
+    noun: "item",
+    nounPlural: "items",
+    maxRounds: 4,
+  });
+  assert.strictEqual(typeof restored.tournament.active[0].id, "number", "id type changed");
+  assert.deepStrictEqual(Core.buildJson(restored.tournament), ranking);
 });
 
 // The top score is not the round number: a lone leader who is paired down and
