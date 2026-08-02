@@ -87,6 +87,13 @@ let maxRounds = 0;
 let recommendedRounds = 0;
 let currentRoundHeader = null;
 let tourneyItems = [];
+let currentPairs = [];
+let currentPairIndex = 0;
+let roundHistory = [];
+
+const STORAGE_KEY = "bracket-state-v1";
+const ITEM_INDEX = new Map(ITEMS.map((item) => [String(item.id), item]));
+const ITEM_FINGERPRINT = ITEMS.map((item) => String(item.id)).join("\u001f");
 
 // --- Utilities ---
 function shuffle(arr) {
@@ -109,6 +116,65 @@ function escAttr(str) {
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function itemById(id) {
+  return ITEM_INDEX.get(String(id)) || null;
+}
+
+function clearSavedState() {
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Ignore storage failures and keep the app usable without persistence.
+  }
+}
+
+function saveState(view) {
+  if (!tourneyItems.length) return;
+  try {
+    const state = {
+      itemFingerprint: ITEM_FINGERPRINT,
+      view,
+      comparisonsDone,
+      currentRound,
+      roundMatchups,
+      roundMatchupsDone,
+      currentPairIndex,
+      maxRounds,
+      recommendedRounds,
+      tourneyItemIds: tourneyItems.map((item) => item.id),
+      currentPairs: currentPairs.map(([a, b]) => [a.id, b.id]),
+      roundHistory,
+      stats: Object.fromEntries(
+        [...stats.entries()].map(([id, s]) => [id, {
+          wins: s.wins,
+          opponents: [...s.opponents],
+          hadBye: s.hadBye,
+          buchholz: s.buchholz,
+        }]),
+      ),
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Ignore storage failures and keep the app usable without persistence.
+  }
+}
+
+function loadSavedState() {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const state = JSON.parse(raw);
+    if (!state || state.itemFingerprint !== ITEM_FINGERPRINT) {
+      clearSavedState();
+      return null;
+    }
+    return state;
+  } catch {
+    clearSavedState();
+    return null;
+  }
 }
 
 // --- Swiss pairing ---
@@ -385,22 +451,15 @@ function showRoundResults() {
 
   matchupSection.classList.add("hidden");
   resultsSection.classList.remove("hidden");
+  saveState("results");
 }
 
 // --- Main tournament (one round at a time; user adds rounds for accuracy) ---
-async function runRound() {
-  currentRound++;
-  addRoundPill(currentRound);
-  logRoundDivider(currentRound);
+async function playCurrentRound() {
+  while (currentPairIndex < currentPairs.length) {
+    const [a, b] = currentPairs[currentPairIndex];
 
-  const { pairs } = swissPair(tourneyItems);
-  roundMatchups = pairs.length;
-  roundMatchupsDone = 0;
-  updateProgress();
-
-  for (let m = 0; m < pairs.length; m++) {
-    const [a, b] = pairs[m];
-
+    saveState("matchup");
     const winner = await pickWinner(a, b);
     const loser = winner === a ? b : a;
 
@@ -408,20 +467,185 @@ async function runRound() {
     stats.get(a.id).opponents.push(b.id);
     stats.get(b.id).opponents.push(a.id);
     roundMatchupsDone++;
+    currentPairIndex++;
     updateProgress();
     logComparison(comparisonsDone, winner, loser);
+    const roundEntry = roundHistory[roundHistory.length - 1];
+    if (roundEntry) {
+      roundEntry.comparisons.push({
+        n: comparisonsDone,
+        winnerId: winner.id,
+        loserId: loser.id,
+      });
+    }
+    saveState(currentPairIndex < currentPairs.length ? "matchup" : "results");
   }
 
   showRoundResults();
 }
 
+function runRound() {
+  currentRound++;
+  addRoundPill(currentRound);
+  logRoundDivider(currentRound);
+
+  const { pairs } = swissPair(tourneyItems);
+  currentPairs = pairs;
+  currentPairIndex = 0;
+  roundMatchups = currentPairs.length;
+  roundMatchupsDone = 0;
+  roundHistory.push({ round: currentRound, comparisons: [] });
+  updateProgress();
+  saveState("matchup");
+  playCurrentRound();
+}
+
+function restoreRoundHistory(history) {
+  roundHistory = Array.isArray(history) ? history : [];
+  standingsEl.innerHTML = "";
+  currentRoundHeader = null;
+
+  for (const entry of roundHistory) {
+    if (!entry || !Number.isInteger(entry.round)) continue;
+    logRoundDivider(entry.round);
+    const comparisons = Array.isArray(entry.comparisons) ? entry.comparisons : [];
+    for (const comparison of comparisons) {
+      const winner = itemById(comparison.winnerId);
+      const loser = itemById(comparison.loserId);
+      if (winner && loser) {
+        logComparison(comparison.n, winner, loser);
+      }
+    }
+  }
+}
+
+function restoreTournament(state) {
+  const savedStats = state && state.stats;
+  const savedItemIds = Array.isArray(state && state.tourneyItemIds) ? state.tourneyItemIds : [];
+  const savedPairs = Array.isArray(state && state.currentPairs) ? state.currentPairs : [];
+  if (!savedStats || savedItemIds.length !== ITEMS.length) {
+    clearSavedState();
+    return false;
+  }
+
+  const restoredItems = [];
+  for (const id of savedItemIds) {
+    const item = itemById(id);
+    if (!item) {
+      clearSavedState();
+      return false;
+    }
+    restoredItems.push(item);
+  }
+
+  const restoredStats = new Map();
+  for (const item of ITEMS) {
+    const saved = savedStats[item.id];
+    if (!saved || !Array.isArray(saved.opponents)) {
+      clearSavedState();
+      return false;
+    }
+    restoredStats.set(item.id, {
+      wins: Number(saved.wins) || 0,
+      opponents: saved.opponents.map(String).filter((id) => ITEM_INDEX.has(id)),
+      hadBye: !!saved.hadBye,
+      buchholz: Number(saved.buchholz) || 0,
+    });
+  }
+
+  const restoredPairs = [];
+  for (const pair of savedPairs) {
+    if (!Array.isArray(pair) || pair.length !== 2) {
+      clearSavedState();
+      return false;
+    }
+    const a = itemById(pair[0]);
+    const b = itemById(pair[1]);
+    if (!a || !b) {
+      clearSavedState();
+      return false;
+    }
+    restoredPairs.push([a, b]);
+  }
+
+  stats = restoredStats;
+  comparisonsDone = Number(state.comparisonsDone) || 0;
+  currentRound = Number(state.currentRound) || 0;
+  roundMatchups = Number(state.roundMatchups) || 0;
+  roundMatchupsDone = Number(state.roundMatchupsDone) || 0;
+  currentPairIndex = Number(state.currentPairIndex) || 0;
+  maxRounds = Math.max(1, Number(state.maxRounds) || maxRounds);
+  recommendedRounds = Math.max(1, Number(state.recommendedRounds) || recommendedRounds);
+  tourneyItems = restoredItems;
+  currentPairs = restoredPairs;
+  lastRanking = null;
+  lastJsonText = "";
+
+  const perRound = Math.floor(ITEMS.length / 2);
+  if (progressSub) {
+    progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round`;
+  }
+  progressBar.innerHTML = "";
+  for (let round = 1; round <= currentRound; round++) {
+    addRoundPill(round);
+  }
+  restoreRoundHistory(state.roundHistory);
+  updateProgress();
+
+  setupSection.classList.add("hidden");
+  progressSection.classList.remove("hidden");
+  standingsSection.classList.remove("hidden");
+
+  if (state.view === "results") {
+    showRoundResults();
+  } else {
+    resultsSection.classList.add("hidden");
+    matchupSection.classList.remove("hidden");
+    playCurrentRound();
+  }
+  return true;
+}
+
+function resetTournament() {
+  clearSavedState();
+  pendingResolve = null;
+  stats = new Map();
+  comparisonsDone = 0;
+  currentRound = 0;
+  roundMatchups = 0;
+  roundMatchupsDone = 0;
+  lastRanking = null;
+  lastJsonText = "";
+  currentRoundHeader = null;
+  tourneyItems = [];
+  currentPairs = [];
+  currentPairIndex = 0;
+  roundHistory = [];
+
+  standingsEl.innerHTML = "";
+  progressBar.innerHTML = "";
+  finalTiersEl.innerHTML = "";
+  setupSection.classList.remove("hidden");
+  progressSection.classList.add("hidden");
+  matchupSection.classList.add("hidden");
+  standingsSection.classList.add("hidden");
+  resultsSection.classList.add("hidden");
+  init();
+}
+
 function startTournament() {
+  clearSavedState();
   stats = new Map();
   for (const a of ITEMS) {
     stats.set(a.id, { wins: 0, opponents: [], hadBye: false, buchholz: 0 });
   }
   comparisonsDone = 0;
   currentRound = 0;
+  currentPairs = [];
+  currentPairIndex = 0;
+  roundHistory = [];
+  lastRanking = null;
+  lastJsonText = "";
   standingsEl.innerHTML = "";
   currentRoundHeader = null;
   progressBar.innerHTML = "";
@@ -504,8 +728,8 @@ if (emailBtn) {
 }
 
 restartBtn.addEventListener("click", () => {
-  if (window.confirm("Start over? The current ranking will be lost.")) {
-    location.reload();
+  if (window.confirm("Start over? The current ranking and saved progress will be lost.")) {
+    resetTournament();
   }
 });
 
@@ -586,6 +810,10 @@ function init() {
   recommendedRounds = Math.min(RECOMMENDED_ROUNDS_CFG || recDefault, maxRounds);
   const perRound = Math.floor(ITEMS.length / 2);
   comparisonEstimate.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round \u00B7 ${recommendedRounds} rounds recommended`;
+
+  if (!restoreTournament(loadSavedState())) {
+    clearSavedState();
+  }
 }
 
 init();
