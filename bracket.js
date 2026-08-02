@@ -281,7 +281,7 @@ function logComparison(n, winner, loser) {
   const entry = document.createElement("div");
   entry.className = "log-entry";
   entry.innerHTML =
-    `<span class="log-index">${n}.</span> ` +
+    `<span class="log-index">${esc(n)}.</span> ` +
     `<span class="log-win">${esc(winner.title)}</span> ` +
     `<span class="log-vs">vs</span> ` +
     `<span class="log-lose">${esc(loser.title)}</span>`;
@@ -515,7 +515,9 @@ function restoreTournament(saved) {
   }
 
   T = restored;
-  roundMatchups = currentPairs.length || Number(saved.roundMatchups) || 0;
+  // A trimmed pool supports fewer rounds, matching what applyElimination set.
+  maxRounds = roundCapFor(T.active.length);
+  roundMatchups = pairs.length || Number(saved.roundMatchups) || 0;
   roundMatchupsDone = Number(saved.roundMatchupsDone) || 0;
   currentPairIndex = Number(saved.currentPairIndex) || 0;
   currentPairs = pairs;
