@@ -58,6 +58,94 @@
     };
   }
 
+  function snapshotTournament(t) {
+    const stats = {};
+    for (const [id, s] of t.stats.entries()) {
+      stats[id] = {
+        wins: s.wins,
+        byes: s.byes,
+        opponents: s.opponents.slice(),
+        hadBye: s.hadBye,
+        buchholz: s.buchholz,
+      };
+    }
+    return {
+      activeIds: t.active.map((item) => item.id),
+      eliminatedIds: t.eliminated.map((item) => item.id),
+      stats,
+      round: t.round,
+      comparisons: t.comparisons,
+      byesAwarded: t.byesAwarded,
+      eliminationMinRound: t.eliminationMinRound,
+      minActiveAfterElimination: t.minActiveAfterElimination,
+    };
+  }
+
+  function restoreTournament(items, snapshot, options) {
+    if (!snapshot || typeof snapshot !== "object") return null;
+
+    const opts = options || {};
+    const rng = typeof opts.rng === "function" ? opts.rng : Math.random;
+    const activeIds = Array.isArray(snapshot.activeIds) ? snapshot.activeIds : null;
+    const eliminatedIds = Array.isArray(snapshot.eliminatedIds) ? snapshot.eliminatedIds : null;
+    const savedStats = snapshot.stats;
+    if (!activeIds || !eliminatedIds || !savedStats || typeof savedStats !== "object") return null;
+
+    const byKey = new Map(items.map((item) => [String(item.id), item]));
+    const idByKey = new Map(items.map((item) => [String(item.id), item.id]));
+    const allIds = activeIds.concat(eliminatedIds);
+    if (allIds.length !== items.length) return null;
+
+    const seen = new Set();
+    const restoreItems = (ids) => {
+      const restored = [];
+      for (const id of ids) {
+        const key = String(id);
+        if (seen.has(key) || !byKey.has(key)) return null;
+        seen.add(key);
+        restored.push(byKey.get(key));
+      }
+      return restored;
+    };
+
+    const active = restoreItems(activeIds);
+    const eliminated = restoreItems(eliminatedIds);
+    if (!active || !eliminated || seen.size !== items.length) return null;
+
+    const stats = new Map();
+    for (const item of items) {
+      const saved = savedStats[item.id];
+      if (!saved || !Array.isArray(saved.opponents)) return null;
+      const opponents = [];
+      for (const oppId of saved.opponents) {
+        const key = String(oppId);
+        if (!idByKey.has(key) || key === String(item.id)) return null;
+        opponents.push(idByKey.get(key));
+      }
+      stats.set(item.id, {
+        wins: Number(saved.wins) || 0,
+        byes: Number(saved.byes) || 0,
+        opponents,
+        hadBye: !!saved.hadBye,
+        buchholz: Number(saved.buchholz) || 0,
+      });
+    }
+
+    return {
+      all: items.slice(),
+      active,
+      eliminated,
+      stats,
+      rng,
+      round: Number(snapshot.round) || 0,
+      comparisons: Number(snapshot.comparisons) || 0,
+      byesAwarded: Number(snapshot.byesAwarded) || 0,
+      eliminationMinRound: Number(snapshot.eliminationMinRound) || ELIMINATION_MIN_ROUND,
+      minActiveAfterElimination:
+        Number(snapshot.minActiveAfterElimination) || MIN_ACTIVE_AFTER_ELIMINATION,
+    };
+  }
+
   // --- Swiss pairing ---
   // Groups items by win count, shuffles within groups, pairs adjacent items,
   // avoids rematches when possible. Gives a bye to the lowest-ranked item if
@@ -270,6 +358,8 @@
     MIN_ACTIVE_AFTER_ELIMINATION,
     shuffle,
     createTournament,
+    snapshotTournament,
+    restoreTournament,
     swissPair,
     startRound,
     recordResult,
