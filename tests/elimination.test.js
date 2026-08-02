@@ -166,6 +166,48 @@ test("eliminating twice is a no-op the second time", async () => {
   assertInvariants(t, "double eliminate");
 });
 
+// The UI lets a user rescue individual items from a bulk trim, so the core has
+// to accept an arbitrary subset of the candidate list.
+test("a subset of the candidates can be eliminated", async () => {
+  const t = Core.createTournament(makeItems(24), { rng: makeRng(41) });
+  await playChecked(t, 3, randomDecider(makeRng(42)), "subset");
+
+  const candidates = Core.eliminationCandidates(t);
+  assert.ok(candidates.length >= 2, "need at least two candidates for this test");
+  const rescued = candidates[0];
+  Core.eliminate(t, candidates.slice(1));
+
+  assert.ok(t.active.some((i) => i.id === rescued.id), "rescued item left the pool");
+  assert.strictEqual(t.eliminated.length, candidates.length - 1);
+  assert.ok(!t.eliminated.some((i) => i.id === rescued.id));
+  assertInvariants(t, "subset eliminate");
+});
+
+test("a rescued item is offered again next time", async () => {
+  const t = Core.createTournament(makeItems(24), { rng: makeRng(43) });
+  await playChecked(t, 3, randomDecider(makeRng(44)), "recur");
+
+  const candidates = Core.eliminationCandidates(t);
+  const rescued = candidates[0];
+  Core.eliminate(t, candidates.slice(1));
+
+  // Still winless, still past the minimum round, so it comes back up.
+  const again = Core.eliminationCandidates(t);
+  assert.ok(again.some((i) => i.id === rescued.id), "rescued item was not offered again");
+  assert.strictEqual(again.length, 1);
+});
+
+test("the safety floor still holds when only a subset is trimmed", async () => {
+  // Removing every candidate is what the floor is checked against, so removing
+  // fewer can only leave more items in play.
+  const t = Core.createTournament(makeItems(24), { rng: makeRng(45) });
+  await playChecked(t, 3, randomDecider(makeRng(46)), "floor");
+  const candidates = Core.eliminationCandidates(t);
+  Core.eliminate(t, candidates.slice(1));
+  assert.ok(t.active.length >= 2);
+  await playChecked(t, 2, randomDecider(makeRng(47)), "floor");
+});
+
 // The design doc asserts trimming has "minimal effect on the accuracy of the
 // top tiers" without measuring it. This measures it.
 test("trimming does not cost the top of the ranking", async () => {

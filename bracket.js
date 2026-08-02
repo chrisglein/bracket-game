@@ -97,6 +97,7 @@ let maxRounds = 0;
 let recommendedRounds = 0;
 let currentRoundHeader = null;
 let pendingEliminationCandidates = [];
+let keptIds = new Set(); // candidates the user opted to rescue from a trim
 
 // --- Utilities ---
 function esc(str) {
@@ -254,25 +255,43 @@ function tierListHtml(groups) {
 
 // --- Elimination ---
 
+function selectedForElimination() {
+  return pendingEliminationCandidates.filter((item) => !keptIds.has(item.id));
+}
+
+function updateEliminateButton() {
+  const total = pendingEliminationCandidates.length;
+  const n = selectedForElimination().length;
+  const label = eliminateBtn.querySelector(".btn-label");
+  if (label) label.textContent = n === total ? `Eliminate ${total}` : `Eliminate ${n} of ${total}`;
+  eliminateBtn.disabled = n === 0;
+}
+
 function showEliminationPrompt(candidates) {
   if (!elimSection) return;
   if (candidates.length === 0) {
     elimSection.classList.add("hidden");
     pendingEliminationCandidates = [];
+    keptIds.clear();
     return;
   }
   pendingEliminationCandidates = candidates;
+  keptIds.clear();
   const n = candidates.length;
   elimHintEl.textContent =
     `After ${T.round} rounds, ${n} ${n === 1 ? "item" : "items"} still ${n === 1 ? "has" : "have"} ` +
     `0 wins and cannot reach the top tiers. Eliminating them reduces future comparisons; ` +
-    `they will still appear at the bottom of the final ranking.`;
+    `they will still appear at the bottom of the final ranking. ` +
+    `Uncheck any you want to keep in play.`;
   elimListEl.innerHTML = candidates
     .map((item) => {
       const sub = listLineFn(item);
-      return `<li>${esc(item.title)}${sub ? `<span class="elim-sub">${esc(sub)}</span>` : ""}</li>`;
+      return `<li><label><input type="checkbox" checked data-id="${escAttr(item.id)}">` +
+        `<span class="elim-name">${esc(item.title)}</span>` +
+        `${sub ? `<span class="elim-sub">${esc(sub)}</span>` : ""}</label></li>`;
     })
     .join("");
+  updateEliminateButton();
   elimSection.classList.remove("hidden");
 }
 
@@ -366,6 +385,7 @@ function startTournament() {
   T = Core.createTournament(ITEMS);
   maxRounds = roundCapFor(ITEMS.length);
   pendingEliminationCandidates = [];
+  keptIds.clear();
   standingsEl.innerHTML = "";
   currentRoundHeader = null;
   progressBar.innerHTML = "";
@@ -426,11 +446,24 @@ restartBtn.addEventListener("click", () => {
   }
 });
 
+if (elimListEl) {
+  elimListEl.addEventListener("change", (e) => {
+    const box = e.target;
+    if (!box || box.type !== "checkbox") return;
+    if (box.checked) keptIds.delete(box.dataset.id);
+    else keptIds.add(box.dataset.id);
+    box.closest("li").classList.toggle("keeping", !box.checked);
+    updateEliminateButton();
+  });
+}
+
 if (eliminateBtn) {
   eliminateBtn.addEventListener("click", () => {
-    if (!pendingEliminationCandidates.length) return;
-    applyElimination(pendingEliminationCandidates);
+    const selected = selectedForElimination();
+    if (!selected.length) return;
+    applyElimination(selected);
     pendingEliminationCandidates = [];
+    keptIds.clear();
     if (elimSection) elimSection.classList.add("hidden");
     refreshRankingDisplay();
   });
@@ -439,6 +472,7 @@ if (eliminateBtn) {
 if (keepAllBtn) {
   keepAllBtn.addEventListener("click", () => {
     pendingEliminationCandidates = [];
+    keptIds.clear();
     if (elimSection) elimSection.classList.add("hidden");
   });
 }
