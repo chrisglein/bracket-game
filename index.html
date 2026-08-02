@@ -45,6 +45,20 @@
           </button>
           <p id="rounds-note" class="hint"></p>
         </div>
+        <div id="elimination-section" class="hidden elim-panel">
+          <h3 class="elim-heading">Trim the Bracket?</h3>
+          <p id="elim-hint" class="hint"></p>
+          <ul id="elimination-list" class="elim-list"></ul>
+          <div class="elim-actions">
+            <button id="eliminate-btn" class="primary">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4h6v2"></path></svg>
+              <span class="btn-label">Eliminate</span>
+            </button>
+            <button id="keep-all-btn">
+              <span class="btn-label">Keep All</span>
+            </button>
+          </div>
+        </div>
         <div class="results-actions">
           <button id="copy-json">
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
@@ -60,6 +74,7 @@
           </button>
         </div>
         <div id="final-tiers"></div>
+        <div id="eliminated-tiers" class="hidden"></div>
       </section>
 
       <section id="standings-section" class="hidden">
@@ -72,6 +87,7 @@
   <script src="config.js"></script>
   <script src="items.js"></script>
   <script src="art-cache.js" onerror="window.ART={}"></script>
+  <script src="bracket-core.js"></script>
   <script src="bracket.js"></script>
 </body>
 </html>
