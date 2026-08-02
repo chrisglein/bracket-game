@@ -18,7 +18,7 @@ Instead of a full sort (`~n*log2(n)` comparisons), the app runs a **Swiss-system
 - For 64 items: 5 rounds = 160 comparisons (vs. ~296 for a full sort).
 - Any list size works — power-of-2 sizing is **not** required (odd counts get a bye each round).
 - From round 3 on, if any items still have 0 wins, you're offered the chance to trim them from later rounds — as a group, or unchecking any you want to keep in play. Trimmed items stay in the results, in an **Eliminated** section, and in the export.
-- When the rounds finish, the full ranking displays and exports as JSON or email text, and either export can be pasted back into Setup to resume with more rounds.
+- When the rounds finish, the full ranking displays and exports as JSON or email text, and either export can be pasted back into Setup to resume with more rounds. Resuming from an export also offers the trim prompt, since picking a ranking back up is a natural moment to drop items.
 
 ## Make Your Own Ranker
 
