@@ -58,7 +58,7 @@ Set a brand color with `accent` in the config; the engine derives the readable t
 
 - [`index.html`](index.html) — markup + script wiring
 - [`styles.css`](styles.css) — styling (scoped under `#bracket`)
-- [`bracket-core.js`](bracket-core.js) — the ranking engine: pairing, scoring, tiers, export (no DOM)
+- [`bracket-core.js`](bracket-core.js) — the ranking engine: pairing, scoring, tiers, export, save/resume (no DOM)
 - [`bracket.js`](bracket.js) — rendering and event wiring on top of the core (don't edit per-ranker)
 - [`config.js`](config.js) — labels + rendering config (edit me)
 - [`items.js`](items.js) — input data (edit me)

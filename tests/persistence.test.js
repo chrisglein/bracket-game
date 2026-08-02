@@ -13,6 +13,11 @@ const {
 
 const { fruits, makeItems } = require("./fixtures/fruits.js");
 
+// Storage hands back plain JSON, so every restore here is fed the same way.
+function throughJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 test("snapshot and restore preserve ranking state and eliminated ordering", async () => {
   const items = makeItems(17);
   const t = Core.createTournament(items, { rng: makeRng(90) });
@@ -56,9 +61,9 @@ test("restore rejects malformed snapshots", async () => {
   delete missingStat.stats[fruits[0].id];
   assert.strictEqual(Core.restoreTournament(fruits, missingStat), null);
 
-  const duplicateItem = Core.snapshotTournament(t);
-  duplicateItem.eliminatedIds = [duplicateItem.activeIds[0]];
-  assert.strictEqual(Core.restoreTournament(fruits, duplicateItem), null);
+  const wrongItemCount = Core.snapshotTournament(t);
+  wrongItemCount.eliminatedIds = [wrongItemCount.activeIds[0]];
+  assert.strictEqual(Core.restoreTournament(fruits, wrongItemCount), null);
 
   const badOpponent = Core.snapshotTournament(t);
   badOpponent.stats[fruits[0].id].opponents = [fruits[0].id];
@@ -127,10 +132,6 @@ test("numeric ids survive a snapshot roundtrip", async () => {
 // --- Session envelope ---
 // A session is what a host actually persists: the snapshot plus the in-round
 // cursor. Everything below goes through JSON, the way storage would.
-
-function throughJson(value) {
-  return JSON.parse(JSON.stringify(value));
-}
 
 // Stops midway through round 1, the state a reload is most likely to catch.
 function interruptedSession(items, seed) {
