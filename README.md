@@ -2,6 +2,8 @@
 
 A small, dependency-free static web app for ranking **any** list of things by repeatedly picking the one you prefer in head-to-head matchups. It's a reusable **starter template**: point it at a set of albums, board games, movies, or whatever else, and it produces a full tiered ranking.
 
+In-progress rankings are saved in browser storage and resume automatically after a reload until you choose **Start Over**.
+
 ![Screenshot of the tool with 3 different media types](/bracket-game.png)
 
 ## Run It
@@ -56,7 +58,7 @@ Set a brand color with `accent` in the config; the engine derives the readable t
 
 - [`index.html`](index.html) — markup + script wiring
 - [`styles.css`](styles.css) — styling (scoped under `#bracket`)
-- [`bracket-core.js`](bracket-core.js) — the ranking engine: pairing, scoring, tiers, export (no DOM)
+- [`bracket-core.js`](bracket-core.js) — the ranking engine: pairing, scoring, tiers, export, save/resume (no DOM)
 - [`bracket.js`](bracket.js) — rendering and event wiring on top of the core (don't edit per-ranker)
 - [`config.js`](config.js) — labels + rendering config (edit me)
 - [`items.js`](items.js) — input data (edit me)

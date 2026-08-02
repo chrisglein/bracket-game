@@ -108,6 +108,12 @@ let recommendedRounds = 0;
 let currentRoundHeader = null;
 let pendingEliminationCandidates = [];
 let keptIds = new Set(); // candidates the user opted to rescue from a trim
+let currentPairs = [];
+let currentPairIndex = 0;
+let roundHistory = [];
+
+const STORAGE_KEY = "bracket-state-v2";
+const ITEM_INDEX = new Map(ITEMS.map((item) => [String(item.id), item]));
 
 // --- Utilities ---
 function esc(str) {
@@ -169,6 +175,45 @@ function renderCompletedProgress(roundsCompleted, comparisonCount, exactComparis
   progressText.textContent = exactComparisonCount
     ? `Round ${roundsCompleted} · ${comparisonCount} comparison${comparisonCount !== 1 ? "s" : ""}`
     : `Round ${roundsCompleted} · imported ranking`;
+}
+
+function itemById(id) {
+  return ITEM_INDEX.get(String(id)) || null;
+}
+
+function clearSavedState() {
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Ignore storage failures and keep the app usable without persistence.
+  }
+}
+
+function saveState(view) {
+  if (!T) return;
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(Core.snapshotSession(T, {
+      view,
+      roundMatchups,
+      roundMatchupsDone,
+      currentPairIndex,
+      currentPairs,
+      roundHistory,
+      eliminationPromptVisible: !!(elimSection && !elimSection.classList.contains("hidden")),
+      keptIds,
+    })));
+  } catch {
+    // Ignore storage failures and keep the app usable without persistence.
+  }
+}
+
+function loadSavedState() {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
 }
 
 // --- UI: matchup ---
@@ -283,7 +328,7 @@ function logComparison(n, winner, loser) {
   const entry = document.createElement("div");
   entry.className = "log-entry";
   entry.innerHTML =
-    `<span class="log-index">${n}.</span> ` +
+    `<span class="log-index">${esc(n)}.</span> ` +
     `<span class="log-win">${esc(winner.title)}</span> ` +
     `<span class="log-vs">vs</span> ` +
     `<span class="log-lose">${esc(loser.title)}</span>`;
@@ -313,7 +358,7 @@ function tierListHtml(groups) {
 // --- Elimination ---
 
 function selectedForElimination() {
-  return pendingEliminationCandidates.filter((item) => !keptIds.has(item.id));
+  return pendingEliminationCandidates.filter((item) => !keptIds.has(String(item.id)));
 }
 
 function updateEliminateButton() {
@@ -324,7 +369,7 @@ function updateEliminateButton() {
   eliminateBtn.disabled = n === 0;
 }
 
-function showEliminationPrompt(candidates) {
+function showEliminationPrompt(candidates, keptIdList) {
   if (!elimSection) return;
   if (candidates.length === 0) {
     elimSection.classList.add("hidden");
@@ -333,7 +378,7 @@ function showEliminationPrompt(candidates) {
     return;
   }
   pendingEliminationCandidates = candidates;
-  keptIds.clear();
+  keptIds = new Set((keptIdList || []).map(String));
   const n = candidates.length;
   elimHintEl.textContent =
     `After ${T.round} rounds, ${n} ${n === 1 ? "item" : "items"} still ${n === 1 ? "has" : "have"} ` +
@@ -343,7 +388,9 @@ function showEliminationPrompt(candidates) {
   elimListEl.innerHTML = candidates
     .map((item) => {
       const sub = listLineFn(item);
-      return `<li><label><input type="checkbox" checked data-id="${escAttr(item.id)}">` +
+      const checked = keptIds.has(String(item.id)) ? "" : " checked";
+      const keeping = keptIds.has(String(item.id)) ? " class=\"keeping\"" : "";
+      return `<li${keeping}><label><input type="checkbox"${checked} data-id="${escAttr(item.id)}">` +
         `<span class="elim-name">${esc(item.title)}</span>` +
         `${sub ? `<span class="elim-sub">${esc(sub)}</span>` : ""}</label></li>`;
     })
@@ -401,7 +448,8 @@ function refreshRankingDisplay() {
   renderEliminatedSection();
 }
 
-function showRoundResults() {
+function renderResultsView(options) {
+  const opts = options || {};
   refreshRankingDisplay();
   if (resultsHeading) {
     resultsHeading.textContent = `Ranking after round ${T.round}`;
@@ -420,36 +468,166 @@ function showRoundResults() {
     }
   }
 
-  showEliminationPrompt(Core.eliminationCandidates(T));
+  const candidates = Core.eliminationCandidates(T);
+  if (opts.eliminationPromptVisible && candidates.length) {
+    showEliminationPrompt(candidates, opts.keptIds);
+  } else if (elimSection) {
+    elimSection.classList.add("hidden");
+    pendingEliminationCandidates = [];
+    keptIds.clear();
+  }
 
   matchupSection.classList.add("hidden");
   resultsSection.classList.remove("hidden");
+  saveState("results");
 }
 
 // --- Main tournament (one round at a time; user adds rounds for accuracy) ---
-async function runRound() {
-  await Core.playRound(T, pickWinner, {
-    onRoundStart: (t, pairs) => {
-      addRoundPill(t.round);
-      logRoundDivider(t.round);
-      roundMatchups = pairs.length;
-      roundMatchupsDone = 0;
-      updateProgress();
-    },
-    onResult: (t, winner, loser) => {
-      roundMatchupsDone++;
-      updateProgress();
-      logComparison(t.comparisons, winner, loser);
-    },
-  });
-  showRoundResults();
+async function playCurrentRound() {
+  while (currentPairIndex < currentPairs.length) {
+    const [a, b] = currentPairs[currentPairIndex];
+    saveState("matchup");
+
+    const winner = await pickWinner(a, b);
+    const loser = winner.id === a.id ? b : a;
+
+    Core.recordResult(T, winner, loser);
+    roundMatchupsDone++;
+    currentPairIndex++;
+    updateProgress();
+    logComparison(T.comparisons, winner, loser);
+    const roundEntry = roundHistory[roundHistory.length - 1];
+    if (roundEntry) {
+      roundEntry.comparisons.push({
+        n: T.comparisons,
+        winnerId: winner.id,
+        loserId: loser.id,
+      });
+    }
+    saveState(currentPairIndex < currentPairs.length ? "matchup" : "results");
+  }
+
+  renderResultsView({ eliminationPromptVisible: true });
+}
+
+function runRound() {
+  const { pairs } = Core.startRound(T);
+  addRoundPill(T.round);
+  logRoundDivider(T.round);
+  currentPairs = pairs;
+  currentPairIndex = 0;
+  roundMatchups = pairs.length;
+  roundMatchupsDone = 0;
+  roundHistory.push({ round: T.round, comparisons: [] });
+  updateProgress();
+  saveState("matchup");
+  playCurrentRound();
+}
+
+function restoreRoundHistory(history) {
+  standingsEl.innerHTML = "";
+  currentRoundHeader = null;
+
+  for (const entry of history) {
+    logRoundDivider(entry.round);
+    for (const comparison of entry.comparisons) {
+      logComparison(comparison.n, itemById(comparison.winnerId), itemById(comparison.loserId));
+    }
+  }
+}
+
+function restoreTournament(saved) {
+  const session = Core.restoreSession(ITEMS, saved);
+  if (!session) return false;
+
+  T = session.tournament;
+  // A trimmed pool supports fewer rounds, matching what applyElimination set.
+  maxRounds = roundCapFor(T.active.length);
+  roundMatchups = session.roundMatchups;
+  roundMatchupsDone = session.roundMatchupsDone;
+  currentPairIndex = session.currentPairIndex;
+  currentPairs = session.currentPairs;
+  roundHistory = session.roundHistory;
+  lastRanking = null;
+  lastJsonText = "";
+  pendingResolve = null;
+  pendingEliminationCandidates = [];
+  keptIds = new Set();
+
+  const perRound = Core.comparisonsPerRound(T);
+  if (progressSub) {
+    progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round`;
+  }
+  if (T.active.length !== ITEMS.length && progressSub) {
+    const n = T.active.length;
+    progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round \u00B7 ${n} item${n !== 1 ? "s" : ""} remaining`;
+  }
+
+  progressBar.innerHTML = "";
+  for (let round = 1; round <= T.round; round++) addRoundPill(round);
+  restoreRoundHistory(roundHistory);
+  updateProgress();
+
+  setupSection.classList.add("hidden");
+  progressSection.classList.remove("hidden");
+  standingsSection.classList.remove("hidden");
+
+  if (session.view === "results") {
+    renderResultsView({
+      eliminationPromptVisible: session.eliminationPromptVisible,
+      keptIds: session.keptIds,
+    });
+  } else {
+    if (elimSection) elimSection.classList.add("hidden");
+    resultsSection.classList.add("hidden");
+    matchupSection.classList.remove("hidden");
+    playCurrentRound();
+  }
+  return true;
+}
+
+function resetTournament() {
+  clearSavedState();
+  T = null;
+  roundMatchups = 0;
+  roundMatchupsDone = 0;
+  pendingResolve = null;
+  lastRanking = null;
+  lastJsonText = "";
+  currentRoundHeader = null;
+  pendingEliminationCandidates = [];
+  keptIds.clear();
+  currentPairs = [];
+  currentPairIndex = 0;
+  roundHistory = [];
+
+  standingsEl.innerHTML = "";
+  progressBar.innerHTML = "";
+  finalTiersEl.innerHTML = "";
+  if (elimSection) elimSection.classList.add("hidden");
+  if (eliminatedTiersEl) {
+    eliminatedTiersEl.classList.add("hidden");
+    eliminatedTiersEl.innerHTML = "";
+  }
+  setupSection.classList.remove("hidden");
+  progressSection.classList.add("hidden");
+  matchupSection.classList.add("hidden");
+  standingsSection.classList.add("hidden");
+  resultsSection.classList.add("hidden");
+  init();
 }
 
 function startTournament() {
+  clearSavedState();
   T = Core.createTournament(ITEMS);
   maxRounds = roundCapFor(ITEMS.length);
   pendingEliminationCandidates = [];
   keptIds.clear();
+  currentPairs = [];
+  currentPairIndex = 0;
+  roundHistory = [];
+  lastRanking = null;
+  lastJsonText = "";
   resetTournamentUi();
   updateProgressSubtext();
   if (elimSection) elimSection.classList.add("hidden");
@@ -468,6 +646,7 @@ function startTournament() {
 }
 
 function resumeTournamentFromText(text) {
+  clearSavedState();
   const restored = Core.importRanking(text, ITEMS, {
     noun: NOUN,
     nounPlural: NOUN_PLURAL,
@@ -479,6 +658,11 @@ function resumeTournamentFromText(text) {
   maxRounds = roundCapFor(T.active.length);
   pendingEliminationCandidates = [];
   keptIds.clear();
+  currentPairs = [];
+  currentPairIndex = 0;
+  roundHistory = [];
+  lastRanking = null;
+  lastJsonText = "";
   resetTournamentUi();
   updateProgressSubtext();
   if (elimSection) elimSection.classList.add("hidden");
@@ -494,7 +678,7 @@ function resumeTournamentFromText(text) {
   matchupSection.classList.add("hidden");
   resultsSection.classList.add("hidden");
 
-  showRoundResults();
+  renderResultsView({ eliminationPromptVisible: false });
 }
 
 // --- Actions ---
@@ -533,8 +717,8 @@ if (emailBtn) {
 }
 
 restartBtn.addEventListener("click", () => {
-  if (window.confirm("Start over? The current ranking will be lost.")) {
-    location.reload();
+  if (window.confirm("Start over? The current ranking and saved progress will be lost.")) {
+    resetTournament();
   }
 });
 
@@ -542,10 +726,11 @@ if (elimListEl) {
   elimListEl.addEventListener("change", (e) => {
     const box = e.target;
     if (!box || box.type !== "checkbox") return;
-    if (box.checked) keptIds.delete(box.dataset.id);
-    else keptIds.add(box.dataset.id);
+    if (box.checked) keptIds.delete(String(box.dataset.id));
+    else keptIds.add(String(box.dataset.id));
     box.closest("li").classList.toggle("keeping", !box.checked);
     updateEliminateButton();
+    saveState("results");
   });
 }
 
@@ -556,8 +741,7 @@ if (eliminateBtn) {
     applyElimination(selected);
     pendingEliminationCandidates = [];
     keptIds.clear();
-    if (elimSection) elimSection.classList.add("hidden");
-    refreshRankingDisplay();
+    renderResultsView({ eliminationPromptVisible: false });
   });
 }
 
@@ -565,7 +749,7 @@ if (keepAllBtn) {
   keepAllBtn.addEventListener("click", () => {
     pendingEliminationCandidates = [];
     keptIds.clear();
-    if (elimSection) elimSection.classList.add("hidden");
+    renderResultsView({ eliminationPromptVisible: false });
   });
 }
 
@@ -668,6 +852,10 @@ function init() {
   recommendedRounds = Math.min(RECOMMENDED_ROUNDS_CFG || recDefault, maxRounds);
   const perRound = Math.floor(ITEMS.length / 2);
   comparisonEstimate.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round \u00B7 ${recommendedRounds} rounds recommended`;
+
+  if (!restoreTournament(loadSavedState())) {
+    clearSavedState();
+  }
 }
 
 init();
