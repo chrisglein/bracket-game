@@ -499,7 +499,6 @@
     const opts = options || {};
     const noun = opts.noun || "item";
     const nounPlural = opts.nounPlural || `${noun}s`;
-    const maxRounds = opts.maxRounds == null ? Math.max(1, items.length - 1) : opts.maxRounds;
 
     if (!entries.length) {
       throw new Error("No ranking entries were found in the pasted export.");
@@ -512,7 +511,7 @@
     const winsById = new Map();
     const activeItems = [];
     const eliminatedItems = [];
-    let inferredRounds = 0;
+    let maxWins = 0;
     let lastWins = Infinity;
     let sawEliminated = false;
     let totalWins = 0;
@@ -541,7 +540,7 @@
           throw new Error("Imported rankings must stay sorted from most wins to fewest wins.");
         }
         activeItems.push(entry.item);
-        inferredRounds = Math.max(inferredRounds, entry.wins);
+        maxWins = Math.max(maxWins, entry.wins);
         lastWins = entry.wins;
       }
       seen.add(entry.item.id);
@@ -549,15 +548,12 @@
       totalWins += entry.wins;
     }
 
-    if (inferredRounds < 1) {
+    if (maxWins < 1) {
       throw new Error("The pasted export does not include any completed rounds to resume from.");
-    }
-    if (inferredRounds > maxRounds) {
-      throw new Error(`This export shows ${inferredRounds} rounds, but the loaded setup only supports ${maxRounds}.`);
     }
 
     return {
-      inferredRounds,
+      maxWins,
       winsById,
       activeItems,
       eliminatedItems,
@@ -566,7 +562,37 @@
     };
   }
 
+  // An export records wins, not rounds. While the pool is intact every round
+  // hands out exactly ceil(n/2) wins — floor(n/2) matchups plus a bye when the
+  // count is odd — so the round count and the bye count divide back out. The
+  // top score alone would undercount: a lone leader who is paired down and
+  // loses leaves the whole field a win short of the round number.
+  //
+  // A trimmed pool breaks the arithmetic, since the round it shrank in is not
+  // recorded. There the top score is the best available floor, and the split
+  // between matchups and byes is unknowable — hence `exact`.
+  function inferProgress(validated, itemCount) {
+    const winsPerRound = Math.ceil(itemCount / 2);
+    const rounds = validated.totalWins / winsPerRound;
+    if (validated.hasEliminated || !Number.isInteger(rounds) || rounds < validated.maxWins) {
+      return {
+        rounds: validated.maxWins,
+        comparisons: validated.totalWins,
+        byesAwarded: 0,
+        exact: false,
+      };
+    }
+    const byesAwarded = (itemCount % 2) * rounds;
+    return {
+      rounds,
+      comparisons: validated.totalWins - byesAwarded,
+      byesAwarded,
+      exact: true,
+    };
+  }
+
   function importRanking(text, items, options) {
+    const opts = options || {};
     const trimmed = String(text == null ? "" : text).trim();
     if (!trimmed) {
       throw new Error("Paste exported JSON or email text to resume.");
@@ -582,15 +608,22 @@
     }
 
     const validated = validateImportedEntries(entries, itemList, options);
+    const progress = inferProgress(validated, itemList.length);
+    const maxRounds = opts.maxRounds == null ? Math.max(1, itemList.length - 1) : opts.maxRounds;
+    if (progress.rounds > maxRounds) {
+      throw new Error(`This export shows ${progress.rounds} rounds, but the loaded setup only supports ${maxRounds}.`);
+    }
+
     const tournament = createTournament(itemList);
     tournament.active = validated.activeItems.slice();
     tournament.eliminated = validated.eliminatedItems.slice();
-    tournament.round = validated.inferredRounds;
-    tournament.comparisons = validated.hasEliminated
-      ? validated.totalWins
-      : Math.max(0, validated.totalWins - (itemList.length % 2 === 0 ? 0 : validated.inferredRounds));
-    tournament.byesAwarded = validated.totalWins - tournament.comparisons;
+    tournament.round = progress.rounds;
+    tournament.comparisons = progress.comparisons;
+    tournament.byesAwarded = progress.byesAwarded;
 
+    // Wins are all an export carries. Who played whom, and who sat out, is
+    // gone, so a resumed run can repeat a matchup and Buchholz restarts from
+    // the rounds still to come.
     for (const item of itemList) {
       const s = tournament.stats.get(item.id);
       s.wins = validated.winsById.get(item.id) || 0;
@@ -602,8 +635,8 @@
 
     return {
       tournament,
-      roundsCompleted: validated.inferredRounds,
-      exactComparisonCount: !validated.hasEliminated,
+      roundsCompleted: progress.rounds,
+      exactComparisonCount: progress.exact,
     };
   }
 

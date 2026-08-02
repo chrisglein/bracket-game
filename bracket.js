@@ -46,7 +46,6 @@ const listLineFn = typeof CFG.listLine === "function" ? CFG.listLine : () => "";
 const JSON_FIELDS = Array.isArray(CFG.jsonFields) ? CFG.jsonFields : [];
 
 const ITEMS = Array.isArray(window.ITEMS) ? window.ITEMS : [];
-const ITEMS_BY_ID = new Map(ITEMS.map((item) => [String(item.id), item]));
 const TITLE_COUNTS = new Map();
 for (const item of ITEMS) {
   TITLE_COUNTS.set(item.title, (TITLE_COUNTS.get(item.title) || 0) + 1);
@@ -136,7 +135,7 @@ function itemSummary(item) {
 }
 
 function rankingSummary(entry) {
-  const item = ITEMS_BY_ID.get(String(entry.id)) || entry;
+  const item = itemById(entry.id) || entry;
   return (TITLE_COUNTS.get(item.title) || 0) > 1 ? itemSummary(item) : item.title;
 }
 
@@ -758,6 +757,7 @@ if (anotherRoundBtn) {
     if (T.round >= maxRounds) return;
     resultsSection.classList.add("hidden");
     matchupSection.classList.remove("hidden");
+    standingsSection.classList.remove("hidden");
     runRound();
   });
 }
