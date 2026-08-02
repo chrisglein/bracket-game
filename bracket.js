@@ -68,11 +68,21 @@ const standingsEl = document.getElementById("standings");
 const resultsSection = document.getElementById("results-section");
 const resultsHeading = document.getElementById("results-heading");
 const finalTiersEl = document.getElementById("final-tiers");
+const eliminatedTiersEl = document.getElementById("eliminated-tiers");
 const roundsNote = document.getElementById("rounds-note");
 const anotherRoundBtn = document.getElementById("another-round");
 const copyBtn = document.getElementById("copy-json");
 const emailBtn = document.getElementById("email-results");
 const restartBtn = document.getElementById("restart");
+
+const elimSection = document.getElementById("elimination-section");
+const elimRoundCountEl = document.getElementById("elim-round-count");
+const elimCountEl = document.getElementById("elim-count");
+const elimPluralEl = document.getElementById("elim-plural");
+const elimHaveEl = document.getElementById("elim-have");
+const elimListEl = document.getElementById("elimination-list");
+const eliminateBtn = document.getElementById("eliminate-btn");
+const keepAllBtn = document.getElementById("keep-all-btn");
 
 // --- State ---
 let stats = new Map(); // itemId -> { wins, opponents[], hadBye, buchholz }
@@ -87,6 +97,8 @@ let maxRounds = 0;
 let recommendedRounds = 0;
 let currentRoundHeader = null;
 let tourneyItems = [];
+let eliminatedItems = [];
+let pendingEliminationCandidates = [];
 
 // --- Utilities ---
 function shuffle(arr) {
@@ -357,7 +369,81 @@ function buildJson(ranked) {
     }
     tierNum++;
   }
+  // Append eliminated items at the end with eliminated: true
+  for (const a of eliminatedItems) {
+    const w = stats.get(a.id).wins;
+    const entry = { rank: null, tier: null, id: a.id, title: a.title, wins: w, eliminated: true };
+    for (const f of JSON_FIELDS) {
+      if (a[f] !== undefined) entry[f] = a[f];
+    }
+    json.push(entry);
+  }
   return json;
+}
+
+// --- Elimination ---
+function getEliminationCandidates() {
+  if (currentRound < 3) return [];
+  const candidates = tourneyItems.filter(item => stats.get(item.id).wins === 0);
+  // Safety: require at least 2 items to remain in the active pool
+  if (tourneyItems.length - candidates.length < 2) return [];
+  return candidates;
+}
+
+function showEliminationPrompt(candidates) {
+  if (!elimSection) return;
+  if (candidates.length === 0) {
+    elimSection.classList.add("hidden");
+    pendingEliminationCandidates = [];
+    return;
+  }
+  pendingEliminationCandidates = candidates;
+  if (elimRoundCountEl) elimRoundCountEl.textContent = currentRound;
+  if (elimCountEl) elimCountEl.textContent = candidates.length;
+  if (elimPluralEl) elimPluralEl.textContent = candidates.length !== 1 ? "s" : "";
+  if (elimHaveEl) elimHaveEl.textContent = candidates.length !== 1 ? "ve" : "s";
+  if (elimListEl) {
+    elimListEl.innerHTML = candidates
+      .map(item => {
+        const sub = listLineFn(item);
+        return `<li>${esc(item.title)}${sub ? `<span class="elim-sub">${esc(sub)}</span>` : ""}</li>`;
+      })
+      .join("");
+  }
+  elimSection.classList.remove("hidden");
+}
+
+function renderEliminatedSection() {
+  if (!eliminatedTiersEl) return;
+  if (eliminatedItems.length === 0) {
+    eliminatedTiersEl.classList.add("hidden");
+    eliminatedTiersEl.innerHTML = "";
+    return;
+  }
+  const sorted = [...eliminatedItems].sort(
+    (a, b) => stats.get(b.id).wins - stats.get(a.id).wins
+  );
+  let html = `<div class="tier-group elim-tier-group"><h3>Eliminated (${eliminatedItems.length})</h3><ol>`;
+  for (const a of sorted) {
+    const w = stats.get(a.id).wins;
+    const thumb = artImg(a, "list-art");
+    const sub = listLineFn(a) || "";
+    html += `<li class="elim-item">${thumb}<span class="tier-title">${esc(a.title)}</span>${sub ? `<span class="list-sub">${esc(sub)}</span>` : ""}<span class="elim-badge">${w} win${w !== 1 ? "s" : ""}</span></li>`;
+  }
+  html += "</ol></div>";
+  eliminatedTiersEl.innerHTML = html;
+  eliminatedTiersEl.classList.remove("hidden");
+}
+
+function applyElimination(candidates) {
+  const ids = new Set(candidates.map(i => i.id));
+  eliminatedItems.push(...candidates);
+  tourneyItems = tourneyItems.filter(i => !ids.has(i.id));
+  // Update the per-round comparison estimate in the progress section
+  const perRound = Math.floor(tourneyItems.length / 2);
+  if (progressSub) {
+    progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round \u00B7 ${tourneyItems.length} item${tourneyItems.length !== 1 ? "s" : ""} remaining`;
+  }
 }
 
 function showRoundResults() {
@@ -366,6 +452,7 @@ function showRoundResults() {
   lastJsonText = JSON.stringify(lastRanking, null, 2);
 
   finalTiersEl.innerHTML = tierListHtml(ranked);
+  renderEliminatedSection();
   if (resultsHeading) {
     resultsHeading.textContent = `Ranking after round ${currentRound}`;
   }
@@ -382,6 +469,8 @@ function showRoundResults() {
       roundsNote.textContent = "Enough for solid tiers. Add rounds to refine further.";
     }
   }
+
+  showEliminationPrompt(getEliminationCandidates());
 
   matchupSection.classList.add("hidden");
   resultsSection.classList.remove("hidden");
@@ -422,6 +511,8 @@ function startTournament() {
   }
   comparisonsDone = 0;
   currentRound = 0;
+  eliminatedItems = [];
+  pendingEliminationCandidates = [];
   standingsEl.innerHTML = "";
   currentRoundHeader = null;
   progressBar.innerHTML = "";
@@ -430,6 +521,11 @@ function startTournament() {
     progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round`;
   }
   tourneyItems = shuffle([...ITEMS]);
+  if (elimSection) elimSection.classList.add("hidden");
+  if (eliminatedTiersEl) {
+    eliminatedTiersEl.classList.add("hidden");
+    eliminatedTiersEl.innerHTML = "";
+  }
 
   setupSection.classList.add("hidden");
   progressSection.classList.remove("hidden");
@@ -508,6 +604,28 @@ restartBtn.addEventListener("click", () => {
     location.reload();
   }
 });
+
+if (eliminateBtn) {
+  eliminateBtn.addEventListener("click", () => {
+    if (!pendingEliminationCandidates.length) return;
+    applyElimination(pendingEliminationCandidates);
+    pendingEliminationCandidates = [];
+    if (elimSection) elimSection.classList.add("hidden");
+    // Refresh the ranking display (fewer items) and eliminated section
+    const ranked = computeRanking(tourneyItems);
+    lastRanking = buildJson(ranked);
+    lastJsonText = JSON.stringify(lastRanking, null, 2);
+    finalTiersEl.innerHTML = tierListHtml(ranked);
+    renderEliminatedSection();
+  });
+}
+
+if (keepAllBtn) {
+  keepAllBtn.addEventListener("click", () => {
+    pendingEliminationCandidates = [];
+    if (elimSection) elimSection.classList.add("hidden");
+  });
+}
 
 if (anotherRoundBtn) {
   anotherRoundBtn.addEventListener("click", () => {
