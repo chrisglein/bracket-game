@@ -51,6 +51,11 @@ const itemCountEl = document.getElementById("item-count");
 const itemNounEl = document.getElementById("item-noun");
 const comparisonEstimate = document.getElementById("comparison-estimate");
 const startBtn = document.getElementById("start-btn");
+const resumeBtn = document.getElementById("resume-btn");
+const resumePanel = document.getElementById("resume-panel");
+const resumeText = document.getElementById("resume-text");
+const resumeImportBtn = document.getElementById("resume-import");
+const resumeError = document.getElementById("resume-error");
 
 const progressSection = document.getElementById("progress-section");
 const progressText = document.getElementById("progress-text");
@@ -109,6 +114,201 @@ function escAttr(str) {
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function itemSummary(item) {
+  const suffix = listLineFn(item) || "";
+  return suffix ? `${item.title} — ${suffix}` : item.title;
+}
+
+function setResumeError(message) {
+  if (!resumeError) return;
+  if (message) {
+    resumeError.textContent = message;
+    resumeError.classList.remove("hidden");
+  } else {
+    resumeError.textContent = "";
+    resumeError.classList.add("hidden");
+  }
+}
+
+function resetTournamentUi() {
+  standingsEl.innerHTML = "";
+  currentRoundHeader = null;
+  progressBar.innerHTML = "";
+  pendingResolve = null;
+}
+
+function renderCompletedProgress(roundsCompleted) {
+  progressBar.innerHTML = "";
+  for (let round = 1; round <= roundsCompleted; round++) {
+    addRoundPill(round);
+  }
+  const segments = progressBar.querySelectorAll(".progress-segment");
+  segments.forEach((seg) => {
+    const fill = seg.querySelector(".segment-fill");
+    fill.style.width = "100%";
+    seg.classList.add("completed");
+    seg.classList.remove("active");
+  });
+  progressText.textContent = `Round ${roundsCompleted} · ${comparisonsDone} comparison${comparisonsDone !== 1 ? "s" : ""}`;
+}
+
+function validateImportedEntries(entries) {
+  if (!entries.length) {
+    throw new Error("No ranking entries were found in the pasted export.");
+  }
+  if (entries.length !== ITEMS.length) {
+    throw new Error(`Expected ${ITEMS.length} ${NOUN_PLURAL} in the export, found ${entries.length}.`);
+  }
+
+  const seen = new Set();
+  const winsById = new Map();
+  let inferredRounds = 0;
+  let lastWins = Infinity;
+
+  for (const entry of entries) {
+    if (!entry || !entry.item) {
+      throw new Error("The pasted export does not match the loaded items.");
+    }
+    if (seen.has(entry.item.id)) {
+      throw new Error(`Duplicate ${NOUN} found in the pasted export: ${entry.item.title}.`);
+    }
+    if (!Number.isInteger(entry.wins) || entry.wins < 0) {
+      throw new Error("Each imported entry must include a whole-number win count.");
+    }
+    if (entry.wins > lastWins) {
+      throw new Error("Imported rankings must stay sorted from most wins to fewest wins.");
+    }
+    seen.add(entry.item.id);
+    winsById.set(entry.item.id, entry.wins);
+    inferredRounds = Math.max(inferredRounds, entry.wins);
+    lastWins = entry.wins;
+  }
+
+  if (inferredRounds < 1) {
+    throw new Error("The pasted export does not include any completed rounds to resume from.");
+  }
+  if (inferredRounds > maxRounds) {
+    throw new Error(`This export shows ${inferredRounds} rounds, but the loaded setup only supports ${maxRounds}.`);
+  }
+
+  return { inferredRounds, winsById };
+}
+
+function parseJsonImport(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("JSON exports must be an array of ranked entries.");
+  }
+
+  const itemsById = new Map(ITEMS.map((item) => [String(item.id), item]));
+  return {
+    entries: parsed.map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        throw new Error("JSON exports must contain objects for each ranked item.");
+      }
+      const item = itemsById.get(String(entry.id));
+      if (!item) {
+        throw new Error("The pasted JSON does not match the loaded items.");
+      }
+      return { item, wins: entry.wins };
+    }),
+  };
+}
+
+function parseEmailImport(text) {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length || !lines.some((line) => /^##\s+\d+\s+win/i.test(line))) {
+    return null;
+  }
+
+  const itemsBySummary = new Map();
+  const uniqueTitles = new Map();
+  for (const item of ITEMS) {
+    itemsBySummary.set(itemSummary(item), item);
+    uniqueTitles.set(item.title, (uniqueTitles.get(item.title) || 0) + 1);
+  }
+
+  const entries = [];
+  let currentWins = null;
+  for (const line of lines) {
+    const header = line.match(/^##\s+(\d+)\s+wins?$/i);
+    if (header) {
+      currentWins = Number(header[1]);
+      continue;
+    }
+    if (/^\(truncated,/i.test(line)) {
+      throw new Error("Truncated email exports cannot be resumed. Use Copy JSON for the full ranking.");
+    }
+    if (currentWins == null) {
+      throw new Error("Each email section must start with a '## N Wins' heading.");
+    }
+    const item =
+      itemsBySummary.get(line) ||
+      (uniqueTitles.get(line) === 1 ? ITEMS.find((candidate) => candidate.title === line) : null);
+    if (!item) {
+      throw new Error(`Could not match this imported line to a loaded ${NOUN}: ${line}`);
+    }
+    entries.push({ item, wins: currentWins });
+  }
+
+  return { entries };
+}
+
+function parseImportedText(text) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error("Paste exported JSON or email text to resume.");
+  }
+
+  const parsedJson = parseJsonImport(trimmed);
+  if (parsedJson) return parsedJson;
+
+  const parsedEmail = parseEmailImport(trimmed);
+  if (parsedEmail) return parsedEmail;
+
+  throw new Error("Paste exported JSON or the email body generated by this app.");
+}
+
+function resumeTournamentFromText(text) {
+  const parsed = parseImportedText(text);
+  const { inferredRounds, winsById } = validateImportedEntries(parsed.entries);
+
+  stats = new Map();
+  for (const item of ITEMS) {
+    stats.set(item.id, {
+      wins: winsById.get(item.id) || 0,
+      opponents: [],
+      hadBye: false,
+      buchholz: 0,
+    });
+  }
+
+  comparisonsDone = inferredRounds * Math.floor(ITEMS.length / 2);
+  currentRound = inferredRounds;
+  roundMatchups = 0;
+  roundMatchupsDone = 0;
+  tourneyItems = parsed.entries.map((entry) => entry.item);
+
+  const perRound = Math.floor(ITEMS.length / 2);
+  if (progressSub) {
+    progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round`;
+  }
+
+  resetTournamentUi();
+  renderCompletedProgress(currentRound);
+
+  setupSection.classList.add("hidden");
+  progressSection.classList.remove("hidden");
+  standingsSection.classList.add("hidden");
+
+  showRoundResults();
 }
 
 // --- Swiss pairing ---
@@ -422,9 +622,7 @@ function startTournament() {
   }
   comparisonsDone = 0;
   currentRound = 0;
-  standingsEl.innerHTML = "";
-  currentRoundHeader = null;
-  progressBar.innerHTML = "";
+  resetTournamentUi();
   const perRound = Math.floor(ITEMS.length / 2);
   if (progressSub) {
     progressSub.textContent = `${perRound} comparison${perRound !== 1 ? "s" : ""} per round`;
@@ -475,7 +673,8 @@ function buildEmailContent() {
       lines.push(`## ${e.wins} Win${e.wins !== 1 ? "s" : ""}`);
       lastTier = e.tier;
     }
-    lines.push(e.title);
+    const item = ITEMS.find((candidate) => candidate.id === e.id);
+    lines.push(item ? itemSummary(item) : e.title);
   }
   let body = lines.join("\n");
   // Cap the whole mailto for broad client support. Modern clients handle far
@@ -514,11 +713,33 @@ if (anotherRoundBtn) {
     if (currentRound >= maxRounds) return;
     resultsSection.classList.add("hidden");
     matchupSection.classList.remove("hidden");
+    standingsSection.classList.remove("hidden");
     runRound();
   });
 }
 
 startBtn.addEventListener("click", startTournament);
+
+if (resumeBtn && resumePanel) {
+  resumeBtn.addEventListener("click", () => {
+    resumePanel.classList.toggle("hidden");
+    setResumeError("");
+    if (!resumePanel.classList.contains("hidden") && resumeText) {
+      resumeText.focus();
+    }
+  });
+}
+
+if (resumeImportBtn && resumeText) {
+  resumeImportBtn.addEventListener("click", () => {
+    setResumeError("");
+    try {
+      resumeTournamentFromText(resumeText.value);
+    } catch (error) {
+      setResumeError(error instanceof Error ? error.message : "Could not parse the pasted export.");
+    }
+  });
+}
 
 // --- Accent color (optional) ---
 function hexToRgb(hex) {

@@ -18,7 +18,19 @@
         <p id="setup-intro"></p>
         <p><span id="item-count">0</span> <span id="item-noun">items</span> loaded</p>
         <p id="comparison-estimate" class="hint"></p>
-        <button id="start-btn">Start Ranking</button>
+        <div class="setup-actions">
+          <button id="start-btn">Start Ranking</button>
+          <button id="resume-btn" type="button" class="secondary">Resume from Export</button>
+        </div>
+        <div id="resume-panel" class="resume-panel hidden">
+          <label for="resume-text">Paste exported JSON or email text</label>
+          <textarea id="resume-text" rows="10" spellcheck="false" placeholder="Paste exported JSON or the email body here"></textarea>
+          <div class="resume-actions">
+            <button id="resume-import" type="button">Resume Ranking</button>
+            <p class="hint">The import must match the currently loaded items.</p>
+          </div>
+          <p id="resume-error" class="resume-error hidden" role="alert"></p>
+        </div>
       </section>
 
       <section id="progress-section" class="hidden">
