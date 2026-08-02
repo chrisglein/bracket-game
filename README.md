@@ -27,6 +27,56 @@ Copy this folder, then edit three files — the engine (`bracket.js`) never chan
 
 To rank a *different set of the same media type* (e.g. "my movies" vs. "her movies"), just swap `items.js` (and its `art-cache.js`) — `config.js` and `bracket.js` stay put.
 
+### Example: ranking movies
+
+**`items.js`**
+```js
+window.ITEMS = [
+  { id: "parasite",       title: "Parasite",              director: "Bong Joon-ho",  year: 2019 },
+  { id: "everything-ewt", title: "Everything Everywhere", director: "Daniels",       year: 2022 },
+  { id: "the-lobster",    title: "The Lobster",           director: "Yorgos Lanthimos", year: 2015 },
+  { id: "hereditary",     title: "Hereditary",            director: "Ari Aster",     year: 2018 },
+  // … add as many as you like
+];
+```
+
+**`config.js`**
+```js
+window.BRACKET = {
+  noun: "movie",
+  nounPlural: "movies",
+  prompt: "Which movie do you prefer?",
+  accent: "#e50914",          // brand color (hex); pick any color
+  recommendedRounds: 4,
+
+  // Extra lines shown under the title on each matchup card.
+  cardLines: (item) => [
+    { text: item.director, className: "sub" },
+    { text: String(item.year), className: "meta" },
+  ],
+
+  // Optional: link to IMDb for each movie.
+  link: (item) => item.imdb
+    ? { href: `https://www.imdb.com/title/${item.imdb}/`, label: "IMDb", site: "imdb" }
+    : null,
+
+  // Suffix after the title in the standings + final results lists.
+  listLine: (item) => `${item.director} (${item.year})`,
+
+  // Extra fields to include in the JSON export.
+  jsonFields: ["director", "year"],
+};
+```
+
+**`art-cache.js`** (optional — omit or leave empty if you have no images)
+```js
+window.ART = {
+  "parasite":       "https://example.com/posters/parasite.jpg",
+  "everything-ewt": "https://example.com/posters/eeaao.jpg",
+  // … one entry per item id
+};
+```
+
 ### Config contract (`window.BRACKET`)
 
 All fields optional. Item-derived text is escaped by the engine, so functions return **plain strings/data, never HTML**.
