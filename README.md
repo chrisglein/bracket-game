@@ -28,7 +28,7 @@ Copy this folder, then edit three files — the engine (`bracket.js` and `bracke
 2. **`config.js`** — labels + how each item renders. Sets `window.BRACKET` (see contract below).
 3. **`art-cache.js`** — optional `window.ART` map of `id → image URL`. Generate it with `fetch-art.js`, or write it by hand.
 
-To rank a *different set of the same media type* (e.g. "my movies" vs. "her movies"), just swap `items.js` (and its `art-cache.js`) — `config.js` and the engine stay put.
+To rank a *different set of the same media type* (e.g. "my movies" vs. "her movies"), either swap `items.js` (and its `art-cache.js`), or list both sets under `datasets` so the app opens with a picker — see [Multiple sets in one ranker](#multiple-sets-in-one-ranker).
 
 ### Example: ranking movies
 
@@ -100,6 +100,22 @@ All fields optional. Item-derived text is escaped by the engine, so functions re
 | `listLine(item)` | fn → string | Suffix after the title in standings/results |
 | `jsonFields` | string[] | Extra keys included in the JSON export |
 | `storageKey` | string | Suffix for the saved-progress key; set it when several rankers share one origin |
+| `datasets` | `[{ id, label, blurb, items, art, recommendedRounds }]` | Two or more item sets for the same media type. When present, Setup opens with a picker instead of using `window.ITEMS` |
+
+### Multiple sets in one ranker
+
+One ranker can offer several item sets — same labels, same card rendering, different lists. Give each set an `id`, a `label`, and its own `items` / `art`:
+
+```js
+window.BRACKET.datasets = [
+  { id: "mine",  label: "My Movies",  blurb: "The ones I own.", items: window.ITEMS_MINE,  art: window.ART_MINE },
+  { id: "hers",  label: "Her Movies", items: window.ITEMS_HERS, art: window.ART_HERS },
+];
+```
+
+Since each set's `items` and `art` come from separate data files, assign `datasets` *after* those files load rather than inside the main `window.BRACKET` literal.
+
+With `datasets` set, the app opens on a **Choose a Set** screen: one card per set showing its name, item count, blurb, and a teaser strip of cover art, plus an "In progress" badge when that set has saved progress. Each set gets its own saved-progress slot (the set `id` is appended to `storageKey`), so two rankings can be in flight at once. Picking a set resumes it if it was in progress; **Choose a different set** on the Setup screen goes back to the picker. A ranker with no `datasets` behaves exactly as before, reading `window.ITEMS` and `window.ART`.
 
 ### Theming
 
